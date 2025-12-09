@@ -16,6 +16,9 @@ using IPFBrowser.FileFormats.DDS;
 using IPFBrowser.FileFormats.IES;
 using IPFBrowser.FileFormats.IPF;
 using IPFBrowser.FileFormats.TGA;
+using IPFBrowser.FileFormats.XAC;
+using IPFBrowser.FileFormats.XSM;
+using IPFBrowser.Viewer3D;
 using ScintillaNET;
 using System;
 using System.Collections.Generic;
@@ -39,6 +42,33 @@ namespace IPFBrowser
 		private Dictionary<string, IpfFile> _files = new Dictionary<string, IpfFile>();
 
 		private Dictionary<string, FileFormat> _fileTypes = new Dictionary<string, FileFormat>();
+
+		// IES Editing state
+		private bool _isEditingIes = false;
+		private string _currentIesFilePath = null;
+		private string _currentIesXml = null;  // Track current XML being edited
+
+		// Pending changes - stores modified IES data (as XML) until saved to IPF
+		private Dictionary<string, string> _pendingChanges = new Dictionary<string, string>();
+
+		// Imported files - stores new files to be added to the IPF (path -> binary data)
+		private Dictionary<string, byte[]> _importedFiles = new Dictionary<string, byte[]>();
+
+		// Files marked for deletion from IPF
+		private HashSet<string> _deletedFiles = new HashSet<string>();
+
+		// 3D Viewer
+		private ModelViewerControl _modelViewer;
+		
+		// Multiple IPF support - load additional IPFs for textures, models, etc.
+		private List<Ipf> _additionalIpfs = new List<Ipf>();
+		private Dictionary<string, IpfFile> _additionalFiles = new Dictionary<string, IpfFile>();
+		
+		// Context menu for file list
+		private ContextMenuStrip _fileListContextMenu;
+		
+		// Flag to prevent preview change on right-click
+		private bool _isRightClick = false;
 
 		/// <summary>
 		/// Initializes form.
@@ -70,6 +100,68 @@ namespace IPFBrowser
 			_fileTypes[".bmp"] = _fileTypes[".jpg"];
 			_fileTypes[".png"] = _fileTypes[".jpg"];
 
+			// 3D Model formats
+			_fileTypes[".xac"] = new FileFormat("brick.png", PreviewType.Model3D);
+			_fileTypes[".xsm"] = new FileFormat("film.png", PreviewType.Animation3D);
+			_fileTypes[".xpm"] = new FileFormat("brick.png", PreviewType.HexView);  // Pose/Morph data
+			_fileTypes[".colmesh"] = new FileFormat("brick.png", PreviewType.HexView);
+
+			// World/Level formats (hex view for now)
+			_fileTypes[".3dworld"] = new FileFormat("world.png", PreviewType.HexView);
+			_fileTypes[".3dprop"] = new FileFormat("brick.png", PreviewType.HexView);
+			_fileTypes[".3drender"] = new FileFormat("page_white.png", PreviewType.HexView);
+			_fileTypes[".3deffect"] = new FileFormat("lightning.png", PreviewType.HexView);
+			_fileTypes[".pathengine"] = new FileFormat("map.png", PreviewType.HexView);
+			_fileTypes[".tok"] = new FileFormat("page_white.png", PreviewType.HexView);
+			_fileTypes[".lightcell"] = new FileFormat("lightbulb.png", PreviewType.HexView);
+
+			// Effect formats
+			_fileTypes[".fxdb"] = new FileFormat("page_white_code.png", PreviewType.HexView);
+			_fileTypes[".psb"] = new FileFormat("lightning.png", PreviewType.HexView);
+			_fileTypes[".eft"] = new FileFormat("lightning.png", PreviewType.HexView);
+
+			// Sprite formats
+			_fileTypes[".ibp"] = new FileFormat("picture.png", PreviewType.HexView);
+			_fileTypes[".sprbin"] = new FileFormat("picture.png", PreviewType.HexView);
+			_fileTypes[".actbin"] = new FileFormat("film.png", PreviewType.HexView);
+			_fileTypes[".act"] = new FileFormat("film.png", PreviewType.HexView);
+			_fileTypes[".spr"] = new FileFormat("picture.png", PreviewType.HexView);
+			_fileTypes[".colmap"] = new FileFormat("color_swatch.png", PreviewType.HexView);
+			_fileTypes[".dead"] = new FileFormat("film.png", PreviewType.HexView);
+
+			// Animation timing
+			_fileTypes[".xsmtime"] = new FileFormat("film.png", PreviewType.HexView);
+			_fileTypes[".sklm"] = new FileFormat("brick.png", PreviewType.HexView);
+
+			// Audio formats
+			_fileTypes[".fsb"] = new FileFormat("sound.png", PreviewType.HexView);
+			_fileTypes[".fev"] = new FileFormat("sound.png", PreviewType.HexView);
+			_fileTypes[".fdp"] = new FileFormat("sound.png", PreviewType.HexView);
+			_fileTypes[".mp3"] = new FileFormat("sound.png", PreviewType.HexView);
+			_fileTypes[".snd"] = new FileFormat("sound.png", PreviewType.HexView);
+			_fileTypes[".h"] = new FileFormat("page_white_code.png", PreviewType.Text, Lexer.Cpp);
+
+			// World/Map additional formats
+			_fileTypes[".3dzone"] = new FileFormat("world.png", PreviewType.HexView);
+			_fileTypes[".imctree"] = new FileFormat("brick.png", PreviewType.HexView);
+			_fileTypes[".bgcolmesh"] = new FileFormat("brick.png", PreviewType.HexView);
+			_fileTypes[".wmove"] = new FileFormat("map.png", PreviewType.HexView);
+
+			// Shader formats
+			_fileTypes[".fxh"] = new FileFormat("page_white_code.png", PreviewType.Text, Lexer.Cpp);
+			_fileTypes[".cam"] = new FileFormat("camera.png", PreviewType.HexView);
+
+			// Script API
+			_fileTypes[".export"] = new FileFormat("page_white_code.png", PreviewType.Text, Lexer.Null);
+
+			// Misc binary
+			_fileTypes[".lma"] = new FileFormat("lightbulb.png", PreviewType.HexView);
+			_fileTypes[".bin"] = new FileFormat("page_white.png", PreviewType.HexView);
+			_fileTypes[".db"] = new FileFormat("database.png", PreviewType.HexView);
+			_fileTypes[".x"] = new FileFormat("brick.png", PreviewType.HexView);  // Legacy DirectX mesh
+			_fileTypes[".max"] = new FileFormat("brick.png", PreviewType.HexView);  // 3ds Max scene
+			_fileTypes[".jpeg"] = _fileTypes[".jpg"];
+
 			// Prepare code preview
 			TxtPreview.Dock = DockStyle.Fill;
 			TxtPreview.Visible = false;
@@ -79,6 +171,99 @@ namespace IPFBrowser
 			PnlImagePreview.Dock = DockStyle.Fill;
 			LblPreview.Dock = DockStyle.Fill;
 			GridPreview.Dock = DockStyle.Fill;
+
+			// Initialize 3D viewer
+			try
+			{
+				_modelViewer = new ModelViewerControl();
+				_modelViewer.Dock = DockStyle.Fill;
+				_modelViewer.Visible = false;
+				_modelViewer.TexturesNeeded += ModelViewer_TexturesNeeded;
+				SplFiles.Panel2.Controls.Add(_modelViewer);
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine($"Failed to initialize 3D viewer: {ex.Message}");
+			}
+
+			// Add Tools menu between File and ? (insert at index 1)
+			var toolsMenu = new MenuItem("Tools");
+			var testViewerItem = new MenuItem("Test 3D Viewer (Load Example XAC)");
+			testViewerItem.Click += TestViewerItem_Click;
+			toolsMenu.MenuItems.Add(testViewerItem);
+			
+			toolsMenu.MenuItems.Add(new MenuItem("-")); // Separator
+			
+			var loadAdditionalIpfItem = new MenuItem("Load Additional IPF...");
+			loadAdditionalIpfItem.Click += LoadAdditionalIpf_Click;
+			toolsMenu.MenuItems.Add(loadAdditionalIpfItem);
+			
+			var closeAdditionalIpfsItem = new MenuItem("Close All Additional IPFs");
+			closeAdditionalIpfsItem.Click += CloseAdditionalIpfs_Click;
+			toolsMenu.MenuItems.Add(closeAdditionalIpfsItem);
+			
+			toolsMenu.MenuItems.Add(new MenuItem("-")); // Separator
+			
+			var importIesItem = new MenuItem("Import File(s)...");
+			importIesItem.Click += ImportIesFile_Click;
+			toolsMenu.MenuItems.Add(importIesItem);
+			
+			// Insert Tools menu at index 1 (after File, before ?)
+			mainMenu1.MenuItems.Add(1, toolsMenu);
+
+			// Add Save/Load Session to File menu
+			var saveSessionItem = new MenuItem("Save Session...");
+			saveSessionItem.Click += SaveSession_Click;
+			mainMenu1.MenuItems[0].MenuItems.Add(saveSessionItem);
+
+			var loadSessionItem = new MenuItem("Load Session...");
+			loadSessionItem.Click += LoadSession_Click;
+			mainMenu1.MenuItems[0].MenuItems.Add(loadSessionItem);
+
+			// Create context menu for file list
+			_fileListContextMenu = new ContextMenuStrip();
+			var applyTextureMenuItem = new ToolStripMenuItem("Apply as Texture to Body");
+			applyTextureMenuItem.Click += ApplyTextureToModel_Click;
+			_fileListContextMenu.Items.Add(applyTextureMenuItem);
+			
+			var applyFaceTextureMenuItem = new ToolStripMenuItem("Apply as Texture to Face/Attachment");
+			applyFaceTextureMenuItem.Click += ApplyTextureToAttachment_Click;
+			_fileListContextMenu.Items.Add(applyFaceTextureMenuItem);
+			
+			var applyAttachmentMenuItem = new ToolStripMenuItem("Apply as Attachment to 3D Model (Face/Hair)");
+			applyAttachmentMenuItem.Click += ApplyAttachmentToModel_Click;
+			_fileListContextMenu.Items.Add(applyAttachmentMenuItem);
+			
+			var applyAnimationMenuItem = new ToolStripMenuItem("Apply Animation to Model");
+			applyAnimationMenuItem.Click += ApplyAnimationToModel_Click;
+			_fileListContextMenu.Items.Add(applyAnimationMenuItem);
+			
+			var showRequiredTexturesMenuItem = new ToolStripMenuItem("Show Required Textures");
+			showRequiredTexturesMenuItem.Click += ShowRequiredTextures_Click;
+			_fileListContextMenu.Items.Add(showRequiredTexturesMenuItem);
+			
+			_fileListContextMenu.Items.Add(new ToolStripSeparator());
+			
+			var extractMenuItem = new ToolStripMenuItem("Extract File...");
+			extractMenuItem.Click += (s, ev) => BtnExtractFile_Click(s, ev);
+			_fileListContextMenu.Items.Add(extractMenuItem);
+			
+			var removeImportMenuItem = new ToolStripMenuItem("Remove Imported File");
+			removeImportMenuItem.Click += RemoveImportedFile_Click;
+			_fileListContextMenu.Items.Add(removeImportMenuItem);
+			
+			_fileListContextMenu.Items.Add(new ToolStripSeparator());
+			
+			var deleteFileMenuItem = new ToolStripMenuItem("Delete File from IPF");
+			deleteFileMenuItem.Click += DeleteFileFromIpf_Click;
+			_fileListContextMenu.Items.Add(deleteFileMenuItem);
+			
+			LstFiles.ContextMenuStrip = _fileListContextMenu;
+			_fileListContextMenu.Opening += FileListContextMenu_Opening;
+			
+			// Handle right-click to prevent preview change
+			LstFiles.MouseDown += LstFiles_MouseDown;
+			LstFiles.MouseUp += LstFiles_MouseUp;
 
 			// Disable extract buttons by default
 			BtnExtractPack.Enabled = false;
@@ -150,8 +335,80 @@ namespace IPFBrowser
 			if (OfdIpfFile.ShowDialog() != DialogResult.OK)
 				return;
 
-			var filePath = OfdIpfFile.FileName;
-			Open(filePath);
+			var fileNames = OfdIpfFile.FileNames;
+			if (fileNames.Length == 0)
+				return;
+			
+			// First file becomes the main IPF
+			Open(fileNames[0]);
+			
+			// Additional files are loaded as additional IPFs
+			if (fileNames.Length > 1)
+			{
+				int loadedCount = 0;
+				for (int i = 1; i < fileNames.Length; i++)
+				{
+					try
+					{
+						var ipf = new Ipf(fileNames[i]);
+						ipf.Load();
+						_additionalIpfs.Add(ipf);
+						
+						// Build file dictionary with unique prefix
+						var ipfId = $"IPF{_additionalIpfs.Count}";
+						foreach (var ipfFile in ipf.Files)
+						{
+							_additionalFiles[$"{ipfId}:{ipfFile.FullPath}"] = ipfFile;
+						}
+						
+						// Add IPF to tree view as a new root node
+						var ipfName = Path.GetFileName(fileNames[i]);
+						var rootNode = new TreeNode(ipfName)
+						{
+							ImageIndex = 3, // compress.png icon
+							SelectedImageIndex = 3,
+							Tag = $"{ipfId}:ROOT"
+						};
+						
+						// Build folder structure for this IPF
+						var folderNodes = new Dictionary<string, TreeNode>();
+						foreach (var ipfFile in ipf.Files)
+						{
+							var parts = ipfFile.FullPath.Split('/');
+							var currentPath = "";
+							TreeNode parentNode = rootNode;
+							
+							for (int j = 0; j < parts.Length - 1; j++) // Skip the file name
+							{
+								currentPath += (j > 0 ? "/" : "") + parts[j];
+								var folderKey = $"{ipfId}:{currentPath}";
+								
+								if (!folderNodes.ContainsKey(folderKey))
+								{
+									var folderNode = new TreeNode(parts[j])
+									{
+										ImageIndex = 2, // folder icon
+										SelectedImageIndex = 2,
+										Tag = folderKey
+									};
+									parentNode.Nodes.Add(folderNode);
+									folderNodes[folderKey] = folderNode;
+								}
+								parentNode = folderNodes[folderKey];
+							}
+						}
+						
+						TreeFolders.Nodes.Add(rootNode);
+						loadedCount++;
+					}
+					catch (Exception ex)
+					{
+						Debug.WriteLine($"Error loading additional IPF {fileNames[i]}: {ex.Message}");
+					}
+				}
+				
+				// Silently loaded additional IPFs - no notification needed
+			}
 		}
 
 		/// <summary>
@@ -160,6 +417,37 @@ namespace IPFBrowser
 		/// <param name="filePath"></param>
 		private void Open(string filePath)
 		{
+			// Check for unsaved changes before opening new file
+			if (_pendingChanges.Count > 0 || _isEditingIes)
+			{
+				// Save current editing state
+				if (_isEditingIes && !string.IsNullOrEmpty(_currentIesFilePath))
+				{
+					_pendingChanges[_currentIesFilePath] = TxtPreview.Text;
+				}
+
+				if (_pendingChanges.Count > 0)
+				{
+					var result = MessageBox.Show(
+						$"You have unsaved changes to {_pendingChanges.Count} file(s).\n\nDo you want to save before opening a new file?",
+						Text, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+
+					if (result == DialogResult.Yes)
+					{
+						MnuSave_Click(null, null);
+						return;
+					}
+					else if (result == DialogResult.Cancel)
+					{
+						return;
+					}
+					// DialogResult.No - discard changes and continue
+					_pendingChanges.Clear();
+					_isEditingIes = false;
+					_currentIesFilePath = null;
+				}
+			}
+
 			if (Path.GetExtension(filePath) == ".ies")
 			{
 				this.ResetPreview();
@@ -305,18 +593,97 @@ namespace IPFBrowser
 		/// <param name="e"></param>
 		private void LstFiles_SelectedIndexChanged(object sender, EventArgs e)
 		{
-			ResetPreview();
+			// Don't change preview on right-click (for context menu)
+			if (_isRightClick)
+				return;
+			
+			// Don't change preview when Ctrl is held (multi-select mode)
+			if (Control.ModifierKeys.HasFlag(Keys.Control))
+				return;
+				
+			// If currently editing, save the current XML to pending changes before switching
+			if (_isEditingIes && !string.IsNullOrEmpty(_currentIesFilePath))
+			{
+				// Store current edits
+				_pendingChanges[_currentIesFilePath] = TxtPreview.Text;
+				_isEditingIes = false;
+			}
+
+			// Only reset preview if single selection (multi-select should not change preview)
+			if (LstFiles.SelectedIndices.Count <= 1)
+			{
+				ResetPreview();
+			}
 
 			if (LstFiles.SelectedIndices.Count == 0)
 			{
 				BtnExtractFile.Enabled = false;
+				BtnEditIes.Enabled = false;
+				UpdatePendingChangesUI();
 				return;
 			}
 
 			BtnExtractFile.Enabled = true;
 
-			if (BtnPreview.Checked)
-				Preview();
+			// Enable Edit IES button if selected file is an IES (single selection only)
+			if (LstFiles.SelectedIndices.Count == 1)
+			{
+				var selected = LstFiles.SelectedItems[0];
+				var fileName = (string)selected.Tag;
+				var ext = Path.GetExtension(fileName).ToLowerInvariant();
+				BtnEditIes.Enabled = (ext == ".ies");
+
+				// Check if this file has pending changes - if so, show the edit view
+				if (_pendingChanges.ContainsKey(fileName))
+				{
+					ShowIesEditor(fileName, _pendingChanges[fileName]);
+					return;
+				}
+
+				UpdatePendingChangesUI();
+
+				if (BtnPreview.Checked)
+					Preview();
+			}
+			else
+			{
+				// Multi-select: disable IES editing, don't preview
+				BtnEditIes.Enabled = false;
+				UpdatePendingChangesUI();
+			}
+		}
+
+		/// <summary>
+		/// Track right-click to prevent preview change
+		/// </summary>
+		private void LstFiles_MouseDown(object sender, MouseEventArgs e)
+		{
+			if (e.Button == MouseButtons.Right)
+			{
+				_isRightClick = true;
+				
+				// Select the item under the cursor for context menu
+				var hitTest = LstFiles.HitTest(e.Location);
+				if (hitTest.Item != null)
+				{
+					hitTest.Item.Selected = true;
+				}
+			}
+			else
+			{
+				_isRightClick = false;
+			}
+		}
+		
+		/// <summary>
+		/// Reset right-click flag after mouse up
+		/// </summary>
+		private void LstFiles_MouseUp(object sender, MouseEventArgs e)
+		{
+			if (e.Button != MouseButtons.Right)
+			{
+				_isRightClick = false;
+			}
 		}
 
 		/// <summary>
@@ -327,32 +694,139 @@ namespace IPFBrowser
 		/// <param name="e"></param>
 		private void TreeFolders_AfterSelect(object sender, TreeViewEventArgs e)
 		{
-			var path = e.Node.FullPath.Replace('\\', '/') + '/';
+			// Save current editing state before switching folders
+			if (_isEditingIes && !string.IsNullOrEmpty(_currentIesFilePath))
+			{
+				_pendingChanges[_currentIesFilePath] = TxtPreview.Text;
+				_isEditingIes = false;
+			}
+
+			var nodePath = e.Node.FullPath.Replace('\\', '/');
+			var path = nodePath + '/';
 
 			LstFiles.BeginUpdate();
 			LstFiles.Items.Clear();
 
-			List<string> paths;
-			if (_folders.TryGetValue(path, out paths))
+			// Check if this is an additional IPF node
+			var nodeTag = e.Node.Tag?.ToString() ?? "";
+			bool isAdditionalIpf = nodeTag.StartsWith("IPF") && nodeTag.Contains(":");
+			
+			if (isAdditionalIpf)
 			{
-				foreach (var filePath in paths)
+				// Extract IPF ID and folder path
+				var colonIndex = nodeTag.IndexOf(':');
+				var ipfId = nodeTag.Substring(0, colonIndex);
+				var folderPath = nodeTag.Substring(colonIndex + 1);
+				
+				// Find the corresponding IPF
+				int ipfIndex = int.Parse(ipfId.Substring(3)) - 1; // IPF1 -> index 0
+				if (ipfIndex >= 0 && ipfIndex < _additionalIpfs.Count)
 				{
-					var fileName = Path.GetFileName(filePath);
-					var ext = Path.GetExtension(fileName).ToLowerInvariant();
+					var ipf = _additionalIpfs[ipfIndex];
+					
+					// List files from this IPF that match this folder
+					foreach (var ipfFile in ipf.Files)
+					{
+						var filePath = ipfFile.FullPath;
+						var fileFolder = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
+						
+						// Check if file is directly in this folder
+						bool isInFolder = false;
+						if (folderPath == "ROOT")
+						{
+							// Root level - show files with no folder
+							isInFolder = !filePath.Contains("/");
+						}
+						else
+						{
+							isInFolder = fileFolder.Equals(folderPath, StringComparison.OrdinalIgnoreCase);
+						}
+						
+						if (isInFolder)
+						{
+							var fileName = Path.GetFileName(filePath);
+							var ext = Path.GetExtension(fileName).ToLowerInvariant();
+							
+							var lvi = LstFiles.Items.Add(fileName);
+							lvi.Tag = $"{ipfId}:{ipfFile.FullPath}";
+							
+							FileFormat fileType;
+							if (_fileTypes.TryGetValue(ext, out fileType))
+								lvi.ImageKey = fileType.Icon;
+							else
+								lvi.ImageKey = "page_white.png";
+						}
+					}
+				}
+			}
+			else
+			{
+				// Normal IPF file listing
+				List<string> paths;
+				if (_folders.TryGetValue(path, out paths))
+				{
+					foreach (var filePath in paths)
+					{
+						var fileName = Path.GetFileName(filePath);
+						var ext = Path.GetExtension(fileName).ToLowerInvariant();
 
-					var lvi = LstFiles.Items.Add(fileName);
-					//lvi.SubItems.Add("0 Byte");
-					lvi.Tag = filePath;
+						// Show indicator for files with pending changes/status
+						var displayName = fileName;
+						if (_deletedFiles.Contains(filePath))
+							displayName = "✕ " + fileName;
+						else if (_pendingChanges.ContainsKey(filePath))
+							displayName = "* " + fileName;
+						else if (_importedFiles.ContainsKey(filePath))
+							displayName = "+ " + fileName;
 
-					FileFormat fileType;
-					if (_fileTypes.TryGetValue(ext, out fileType))
-						lvi.ImageKey = fileType.Icon;
-					else
-						lvi.ImageKey = "page_white.png";
+						var lvi = LstFiles.Items.Add(displayName);
+						lvi.Tag = filePath;
+
+						FileFormat fileType;
+						if (_fileTypes.TryGetValue(ext, out fileType))
+							lvi.ImageKey = fileType.Icon;
+						else
+							lvi.ImageKey = "page_white.png";
+
+						// Highlight modified/imported/deleted files
+						if (_deletedFiles.Contains(filePath))
+							lvi.ForeColor = Color.Red;
+						else if (_pendingChanges.ContainsKey(filePath))
+							lvi.ForeColor = Color.DarkOrange;
+						else if (_importedFiles.ContainsKey(filePath))
+							lvi.ForeColor = Color.Green;
+					}
+				}
+
+				// Also show imported files for this folder
+				foreach (var kvp in _importedFiles)
+				{
+					var importedPath = kvp.Key;
+					var importedFolder = Path.GetDirectoryName(importedPath)?.Replace('\\', '/') + "/";
+					
+					// Check if this imported file is in the current folder and not already in paths
+					if (importedFolder == path && (paths == null || !paths.Contains(importedPath)))
+					{
+						var fileName = Path.GetFileName(importedPath);
+						var ext = Path.GetExtension(fileName).ToLowerInvariant();
+
+						var displayName = "+ " + fileName;
+						var lvi = LstFiles.Items.Add(displayName);
+						lvi.Tag = importedPath;
+
+						FileFormat fileType;
+						if (_fileTypes.TryGetValue(ext, out fileType))
+							lvi.ImageKey = fileType.Icon;
+						else
+							lvi.ImageKey = "page_white.png";
+
+						lvi.ForeColor = Color.Green;
+					}
 				}
 			}
 
 			LstFiles.EndUpdate();
+			UpdatePendingChangesUI();
 		}
 
 		/// <summary>
@@ -364,8 +838,35 @@ namespace IPFBrowser
 				return;
 
 			var selected = LstFiles.SelectedItems[0];
-			var fileName = (string)selected.Tag;
-			var ipfFile = _files[fileName];
+			var fileTag = (string)selected.Tag;
+			
+			// Check if this is an imported file (temporary, not yet saved)
+			byte[] importedData = null;
+			bool isImported = _importedFiles.TryGetValue(fileTag, out importedData);
+			
+			// Check if this is an additional IPF file
+			IpfFile ipfFile = null;
+			string fileName;
+			
+			if (fileTag.StartsWith("IPF") && fileTag.Contains(":"))
+			{
+				// From additional IPF
+				if (!_additionalFiles.TryGetValue(fileTag, out ipfFile))
+					return;
+				fileName = fileTag.Substring(fileTag.IndexOf(':') + 1);
+			}
+			else if (isImported)
+			{
+				// Imported file - use the data directly
+				fileName = fileTag;
+			}
+			else
+			{
+				if (!_files.TryGetValue(fileTag, out ipfFile))
+					return;
+				fileName = fileTag;
+			}
+			
 			var ext = Path.GetExtension(fileName).ToLowerInvariant();
 
 			var previewType = PreviewType.None;
@@ -382,10 +883,13 @@ namespace IPFBrowser
 			{
 				try
 				{
+					// Helper to get file data - either from imported files or from IPF
+					Func<byte[]> getData = () => isImported ? importedData : ipfFile.GetData();
+
 					switch (previewType)
 					{
 						case PreviewType.Text:
-							var txtData = ipfFile.GetData();
+							var txtData = getData();
 							var text = Encoding.UTF8.GetString(txtData);
 
 							SetTextPreviewStyle(lexer);
@@ -400,7 +904,7 @@ namespace IPFBrowser
 							break;
 
 						case PreviewType.Image:
-							var imgData = ipfFile.GetData();
+							var imgData = getData();
 
 							Invoke((MethodInvoker)delegate
 							{
@@ -412,32 +916,39 @@ namespace IPFBrowser
 							break;
 
 						case PreviewType.DdsImage:
-							var ddsData = ipfFile.GetData();
+							var ddsData = getData();
 
 							DDSImage ddsImage = null;
 							try
 							{
 								ddsImage = new DDSImage(ddsData);
 							}
-							catch (Exception)
+							catch (Exception ddsEx)
 							{
 								Invoke((MethodInvoker)delegate
 								{
-									LblPreview.Text = "Preview failed";
+									LblPreview.Text = $"Preview failed: {ddsEx.Message}";
 								});
 								break;
 							}
 
 							Invoke((MethodInvoker)delegate
 							{
-								ImgPreview.Image = ddsImage.BitmapImage;
-								ImgPreview.Size = ImgPreview.Image.Size;
-								PnlImagePreview.Visible = true;
+								if (ddsImage != null && ddsImage.BitmapImage != null)
+								{
+									ImgPreview.Image = ddsImage.BitmapImage;
+									ImgPreview.Size = ImgPreview.Image.Size;
+									PnlImagePreview.Visible = true;
+								}
+								else
+								{
+									LblPreview.Text = "Preview failed: Unable to decode DDS image";
+								}
 							});
 							break;
 
 						case PreviewType.TgaImage:
-							var tgaData = ipfFile.GetData();
+							var tgaData = getData();
 
 							TargaImage tgaImage = null;
 							try
@@ -463,7 +974,7 @@ namespace IPFBrowser
 							break;
 
 						case PreviewType.IesTable:
-							var iesData = ipfFile.GetData();
+							var iesData = getData();
 							var iesFile = new IesFile(iesData);
 
 							Invoke((MethodInvoker)delegate
@@ -496,7 +1007,7 @@ namespace IPFBrowser
 
 							try
 							{
-								var ttfData = ipfFile.GetData();
+								var ttfData = getData();
 								using (var ms = new MemoryStream(ttfData))
 								{
 									var fontdata = new byte[ms.Length];
@@ -552,6 +1063,280 @@ namespace IPFBrowser
 								ImgPreview.Image = bmp;
 								ImgPreview.Size = ImgPreview.Image.Size;
 								PnlImagePreview.Visible = true;
+							});
+							break;
+
+						case PreviewType.Model3D:
+							var xacData = getData();
+							try
+							{
+								var xacFile = XacFile.Load(xacData);
+								
+								// Build info text
+								var info = new StringBuilder();
+								info.AppendLine($"=== XAC Model: {fileName} ===");
+								info.AppendLine($"Version: {xacFile.Header.MajorVersion}.{xacFile.Header.MinorVersion}");
+								info.AppendLine($"Big Endian: {xacFile.Header.IsBigEndian}");
+								info.AppendLine();
+								
+								if (xacFile.Metadata != null)
+								{
+									info.AppendLine("--- Metadata ---");
+									info.AppendLine($"Actor Name: {xacFile.Metadata.ActorName}");
+									info.AppendLine($"Source App: {xacFile.Metadata.SourceApp}");
+									info.AppendLine($"Original File: {xacFile.Metadata.OriginalFileName}");
+									info.AppendLine($"Export Date: {xacFile.Metadata.ExportDate}");
+									info.AppendLine();
+								}
+								
+								info.AppendLine($"--- Statistics ---");
+								info.AppendLine($"Nodes (Bones): {xacFile.Nodes.Count}");
+								info.AppendLine($"Materials: {xacFile.Materials.Count}");
+								info.AppendLine($"Meshes: {xacFile.Meshes.Count}");
+								info.AppendLine($"Chunks Parsed: {xacFile.RawChunks.Count}");
+								info.AppendLine();
+								
+								// Show raw chunk info for debugging
+								info.AppendLine("--- Raw Chunks ---");
+								foreach (var chunk in xacFile.RawChunks)
+								{
+									var errInfo = string.IsNullOrEmpty(chunk.ParseError) ? "" : $" [ERROR: {chunk.ParseError}]";
+									info.AppendLine($"  Type: {(int)chunk.Type} ({chunk.Type}), Version: {chunk.Version}, Size: {chunk.Length}{errInfo}");
+								}
+								info.AppendLine();
+								
+								if (xacFile.Nodes.Count > 0)
+								{
+									info.AppendLine("--- Bone Hierarchy ---");
+									foreach (var node in xacFile.Nodes)
+									{
+										string indent = node.ParentNodeId < 0 ? "" : "  ";
+										info.AppendLine($"{indent}{node.Name} (Parent: {node.ParentNodeId}, Children: {node.NumChildren})");
+										info.AppendLine($"{indent}  Position: {node.Position}");
+									}
+									info.AppendLine();
+								}
+								
+								if (xacFile.Materials.Count > 0)
+								{
+									info.AppendLine("--- Materials ---");
+									foreach (var mat in xacFile.Materials)
+									{
+										info.AppendLine($"  {mat.Name}");
+										info.AppendLine($"    Diffuse: {mat.DiffuseColor}, Opacity: {mat.Opacity}");
+										foreach (var layer in mat.Layers)
+											info.AppendLine($"    Texture: {layer.Texture}");
+									}
+									info.AppendLine();
+								}
+								
+								if (xacFile.Meshes.Count > 0)
+								{
+									info.AppendLine("--- Meshes ---");
+									foreach (var mesh in xacFile.Meshes)
+									{
+										info.AppendLine($"  Mesh (Node: {mesh.NodeIndex})");
+										info.AppendLine($"    Vertices: {mesh.NumVertices}, Indices: {mesh.NumIndices}");
+										info.AppendLine($"    SubMeshes: {mesh.NumSubMeshes}, Collision: {mesh.IsCollisionMesh}");
+									}
+									info.AppendLine();
+								}
+								
+								if (xacFile.Properties != null)
+								{
+									info.AppendLine("--- Properties ---");
+									info.AppendLine($"  Name: {xacFile.Properties.Name}");
+									info.AppendLine($"  Shader: {xacFile.Properties.ShaderName}");
+									info.AppendLine($"  FX File: {xacFile.Properties.FxFileName}");
+									foreach (var prop in xacFile.Properties.StringProperties)
+										info.AppendLine($"  {prop.Key} = {prop.Value}");
+								}
+								
+								// Show any parse errors from chunks
+								var errors = xacFile.RawChunks.Where(c => !string.IsNullOrEmpty(c.ParseError)).ToList();
+								if (errors.Count > 0)
+								{
+									info.AppendLine();
+									info.AppendLine("--- Parse Warnings ---");
+									foreach (var chunk in errors)
+										info.AppendLine($"  Chunk {chunk.Type}: {chunk.ParseError}");
+								}
+
+								Invoke((MethodInvoker)delegate
+								{
+									// Check if model has any mesh data
+									bool hasMeshData = xacFile.Meshes.Count > 0;
+									
+									// Try to use 3D viewer if available and has mesh data
+									if (_modelViewer != null && hasMeshData)
+									{
+										try
+										{
+											// Make visible first to trigger OpenGL initialization
+											_modelViewer.Visible = true;
+											_modelViewer.BringToFront();
+											
+											// Give OpenGL time to initialize (Load event fires on first paint)
+											for (int i = 0; i < 10 && !_modelViewer.IsOpenGLReady; i++)
+											{
+												Application.DoEvents();
+												System.Threading.Thread.Sleep(50);
+											}
+											
+											if (_modelViewer.IsOpenGLReady)
+											{
+												_modelViewer.LoadXacModel(xacFile);
+											}
+											else
+											{
+												// OpenGL failed to init
+												_modelViewer.Visible = false;
+												ShowXacTextInfo(info.ToString(), "OpenGL failed to initialize (timeout)");
+											}
+										}
+										catch (Exception glEx)
+										{
+											// Fall back to text view on OpenGL error
+											_modelViewer.Visible = false;
+											ShowXacTextInfo(info.ToString(), $"OpenGL Error: {glEx.Message}");
+										}
+									}
+									else
+									{
+										// No mesh data or no viewer - show text info
+										string reason = !hasMeshData ? "No mesh data in file (skeleton only)" : 
+											(_modelViewer == null ? "Model viewer not initialized" : "OpenGL not available");
+										ShowXacTextInfo(info.ToString(), reason);
+									}
+								});
+							}
+							catch (Exception ex)
+							{
+								Invoke((MethodInvoker)delegate
+								{
+									// Show hex view on parse failure
+									var hexInfo = new StringBuilder();
+									hexInfo.AppendLine($"XAC Parse Error: {ex.Message}");
+									hexInfo.AppendLine($"File: {fileName}");
+									hexInfo.AppendLine($"Size: {xacData.Length:N0} bytes");
+									hexInfo.AppendLine();
+									hexInfo.AppendLine("First 512 bytes:");
+									hexInfo.AppendLine();
+									
+									var xacShowBytes = Math.Min(xacData.Length, 512);
+									for (int i = 0; i < xacShowBytes; i += 16)
+									{
+										hexInfo.Append($"{i:X8}  ");
+										var hexPart = new StringBuilder();
+										var asciiPart = new StringBuilder();
+
+										for (int j = 0; j < 16; j++)
+										{
+											if (i + j < xacShowBytes)
+											{
+												var b = xacData[i + j];
+												hexPart.Append($"{b:X2} ");
+												asciiPart.Append(b >= 32 && b < 127 ? (char)b : '.');
+											}
+											else
+											{
+												hexPart.Append("   ");
+											}
+											if (j == 7) hexPart.Append(" ");
+										}
+										hexInfo.AppendLine($"{hexPart} |{asciiPart}|");
+									}
+									
+									TxtPreview.ReadOnly = false;
+									TxtPreview.Text = hexInfo.ToString();
+									TxtPreview.ReadOnly = true;
+									TxtPreview.Visible = true;
+								});
+							}
+							break;
+
+						case PreviewType.Animation3D:
+							var xsmData = ipfFile.GetData();
+							try
+							{
+								var xsmFile = XsmFile.Load(xsmData);
+								var animInfo = new StringBuilder();
+								animInfo.AppendLine($"XSM Animation: {fileName}");
+								animInfo.AppendLine($"Version: {xsmFile.Header.MajorVersion}.{xsmFile.Header.MinorVersion}");
+								if (xsmFile.Metadata != null)
+								{
+									animInfo.AppendLine($"Motion Name: {xsmFile.Metadata.MotionName}");
+									animInfo.AppendLine($"FPS: {xsmFile.Metadata.FPS}");
+									animInfo.AppendLine($"Source: {xsmFile.Metadata.SourceApp}");
+								}
+								animInfo.AppendLine($"Motion Parts: {xsmFile.MotionParts.Count}");
+								animInfo.AppendLine();
+								foreach (var part in xsmFile.MotionParts)
+								{
+									animInfo.AppendLine($"  Part: {part.Name}");
+									animInfo.AppendLine($"    Position Keys: {part.NumPositionKeys}");
+									animInfo.AppendLine($"    Rotation Keys: {part.NumRotationKeys}");
+									animInfo.AppendLine($"    Scale Keys: {part.NumScaleKeys}");
+								}
+
+								Invoke((MethodInvoker)delegate
+								{
+									TxtPreview.ReadOnly = false;
+									TxtPreview.Text = animInfo.ToString();
+									TxtPreview.ReadOnly = true;
+									TxtPreview.Visible = true;
+								});
+							}
+							catch (Exception ex)
+							{
+								Invoke((MethodInvoker)delegate
+								{
+									LblPreview.Text = $"XSM Parse Error: {ex.Message}";
+								});
+							}
+							break;
+
+						case PreviewType.HexView:
+							var hexData = ipfFile.GetData();
+							var hexView = new StringBuilder();
+							hexView.AppendLine($"File: {fileName}");
+							hexView.AppendLine($"Size: {hexData.Length:N0} bytes");
+							hexView.AppendLine();
+
+							// Show first 2KB in hex view
+							var showBytes = Math.Min(hexData.Length, 2048);
+							for (int i = 0; i < showBytes; i += 16)
+							{
+								hexView.Append($"{i:X8}  ");
+								var hexPart = new StringBuilder();
+								var asciiPart = new StringBuilder();
+
+								for (int j = 0; j < 16; j++)
+								{
+									if (i + j < showBytes)
+									{
+										var b = hexData[i + j];
+										hexPart.Append($"{b:X2} ");
+										asciiPart.Append(b >= 32 && b < 127 ? (char)b : '.');
+									}
+									else
+									{
+										hexPart.Append("   ");
+									}
+									if (j == 7) hexPart.Append(" ");
+								}
+								hexView.AppendLine($"{hexPart} |{asciiPart}|");
+							}
+
+							if (hexData.Length > 2048)
+								hexView.AppendLine($"\n... ({hexData.Length - 2048:N0} more bytes)");
+
+							Invoke((MethodInvoker)delegate
+							{
+								TxtPreview.ReadOnly = false;
+								TxtPreview.Text = hexView.ToString();
+								TxtPreview.ReadOnly = true;
+								TxtPreview.Visible = true;
 							});
 							break;
 
@@ -679,7 +1464,1318 @@ namespace IPFBrowser
 			GridPreview.Rows.Clear();
 			GridPreview.Columns.Clear();
 
+			// Hide 3D viewer
+			if (_modelViewer != null)
+			{
+				_modelViewer.Clear();
+				_modelViewer.Visible = false;
+			}
+
 			LblPreview.Text = "Preview";
+		}
+
+		/// <summary>
+		/// Shows XAC model info as text (fallback when 3D viewer unavailable)
+		/// </summary>
+		private void ShowXacTextInfo(string info, string reason = null)
+		{
+			var sb = new StringBuilder();
+			if (!string.IsNullOrEmpty(reason))
+			{
+				sb.AppendLine($"[3D Viewer Unavailable: {reason}]");
+				sb.AppendLine();
+			}
+			sb.Append(info);
+			
+			TxtPreview.ReadOnly = false;
+			TxtPreview.Text = sb.ToString();
+			TxtPreview.ReadOnly = true;
+			TxtPreview.Visible = true;
+		}
+
+		/// <summary>
+		/// Test 3D viewer with example XAC file
+		/// </summary>
+		private void TestViewerItem_Click(object sender, EventArgs e)
+		{
+			// Look for example XAC file
+			var examplePath = Path.Combine(Application.StartupPath, "..", "..", "plugin_examples", 
+				"Blender249 .xac and .rsm", "Example", "npc_giltine_set.xac");
+			
+			if (!File.Exists(examplePath))
+			{
+				// Try alternate paths
+				var altPaths = new[]
+				{
+					@"plugin_examples\Blender249 .xac and .rsm\Example\npc_giltine_set.xac",
+					@"..\plugin_examples\Blender249 .xac and .rsm\Example\npc_giltine_set.xac",
+					@"..\..\plugin_examples\Blender249 .xac and .rsm\Example\npc_giltine_set.xac"
+				};
+				
+				foreach (var alt in altPaths)
+				{
+					var fullPath = Path.GetFullPath(Path.Combine(Application.StartupPath, alt));
+					if (File.Exists(fullPath))
+					{
+						examplePath = fullPath;
+						break;
+					}
+				}
+			}
+			
+			if (!File.Exists(examplePath))
+			{
+				// Ask user to select a file
+				using (var ofd = new OpenFileDialog())
+				{
+					ofd.Filter = "XAC Files (*.xac)|*.xac|All Files (*.*)|*.*";
+					ofd.Title = "Select XAC file to test";
+					if (ofd.ShowDialog() == DialogResult.OK)
+						examplePath = ofd.FileName;
+					else
+						return;
+				}
+			}
+			
+			try
+			{
+				var data = File.ReadAllBytes(examplePath);
+				var xacFile = XacFile.Load(data);
+				
+				var info = new StringBuilder();
+				info.AppendLine($"=== Test XAC: {Path.GetFileName(examplePath)} ===");
+				info.AppendLine($"File Size: {data.Length:N0} bytes");
+				info.AppendLine($"Nodes: {xacFile.Nodes.Count}");
+				info.AppendLine($"Materials: {xacFile.Materials.Count}");
+				info.AppendLine($"Meshes: {xacFile.Meshes.Count}");
+				info.AppendLine();
+				
+				foreach (var mesh in xacFile.Meshes)
+				{
+					info.AppendLine($"Mesh (Node {mesh.NodeIndex}):");
+					info.AppendLine($"  Vertices: {mesh.NumVertices}");
+					info.AppendLine($"  Indices: {mesh.NumIndices}");
+					info.AppendLine($"  SubMeshes: {mesh.NumSubMeshes}");
+					info.AppendLine($"  VertexAttributes: {mesh.VertexAttributes?.Count ?? 0}");
+					
+					if (mesh.VertexAttributes != null)
+					{
+						foreach (var attr in mesh.VertexAttributes)
+						{
+							var typeNames = new[] { "Position", "Normal", "Tangent", "UV", "Color32", "Influences", "Color128" };
+							var typeName = attr.Type < typeNames.Length ? typeNames[attr.Type] : $"Type{attr.Type}";
+							info.AppendLine($"    {typeName}: {attr.AttribSize} bytes/vertex, Data: {attr.Data?.Length ?? 0} bytes");
+						}
+					}
+				}
+				
+				// Try to show in 3D viewer
+				if (_modelViewer != null && xacFile.Meshes.Count > 0)
+				{
+					ResetPreview();
+					_modelViewer.Visible = true;
+					_modelViewer.BringToFront();
+					
+					// Wait for OpenGL
+					for (int i = 0; i < 20 && !_modelViewer.IsOpenGLReady; i++)
+					{
+						Application.DoEvents();
+						System.Threading.Thread.Sleep(50);
+					}
+					
+					if (_modelViewer.IsOpenGLReady)
+					{
+						_modelViewer.LoadXacModel(xacFile);
+						MessageBox.Show($"Model loaded!\n\n{info}", "Test 3D Viewer", 
+							MessageBoxButtons.OK, MessageBoxIcon.Information);
+					}
+					else
+					{
+						_modelViewer.Visible = false;
+						var errMsg = _modelViewer.InitializationError ?? "Unknown error";
+						MessageBox.Show($"OpenGL failed to initialize.\nError: {errMsg}\n\n{info}", "Test 3D Viewer", 
+							MessageBoxButtons.OK, MessageBoxIcon.Warning);
+					}
+				}
+				else
+				{
+					MessageBox.Show($"No meshes found or viewer unavailable.\n\n{info}", "Test 3D Viewer", 
+						MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				}
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show($"Error loading XAC:\n{ex.Message}\n\n{ex.StackTrace}", "Test 3D Viewer", 
+					MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+
+		/// <summary>
+		/// Called when the 3D model viewer needs textures
+		/// </summary>
+		private void ModelViewer_TexturesNeeded(object sender, EventArgs e)
+		{
+			// User should right-click to apply textures manually
+		}
+		
+		/// <summary>
+		/// Apply an attachment XAC (face, head, hair) to the current 3D model
+		/// Supports multiple selection
+		/// </summary>
+		private void ApplyAttachmentToModel_Click(object sender, EventArgs e)
+		{
+			if (_modelViewer == null || !_modelViewer.HasModel)
+			{
+				MessageBox.Show("No 3D model is currently displayed. Please load a body model first.", 
+					"Apply Attachment", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return;
+			}
+			
+			if (LstFiles.SelectedItems.Count == 0) return;
+			
+			// Collect all XAC files from selection
+			var xacFileNames = new List<string>();
+			var xacFileData = new List<byte[]>();
+			
+			foreach (ListViewItem selected in LstFiles.SelectedItems)
+			{
+				var fileTag = selected.Tag;
+				string fileName = null;
+				byte[] attachmentData = null;
+				
+				if (fileTag is string tagStr)
+				{
+					fileName = Path.GetFileName(tagStr).ToLowerInvariant();
+					
+					// Only process XAC files
+					if (!fileName.EndsWith(".xac")) continue;
+					
+					// Get data from the file
+					if (tagStr.StartsWith("IPF") && tagStr.Contains(":"))
+					{
+						if (_additionalFiles.TryGetValue(tagStr, out var additionalFile))
+						{
+							attachmentData = additionalFile.GetData();
+						}
+					}
+					else if (_files.TryGetValue(tagStr, out var mainFile))
+					{
+						attachmentData = mainFile.GetData();
+					}
+					else if (File.Exists(tagStr))
+					{
+						attachmentData = File.ReadAllBytes(tagStr);
+					}
+				}
+				
+				if (attachmentData != null)
+				{
+					xacFileNames.Add(fileName);
+					xacFileData.Add(attachmentData);
+				}
+			}
+			
+			if (xacFileNames.Count == 0)
+			{
+				MessageBox.Show("Please select one or more XAC files to use as attachments.", 
+					"Apply Attachment", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return;
+			}
+			
+			try
+			{
+				// Get available bones
+				var boneNames = _modelViewer.GetBoneNames();
+				string targetBone = "Bip01 Head"; // Default for face/hair
+				
+				// If shift is held, let user choose bone
+				if (Control.ModifierKeys == Keys.Shift)
+				{
+					var result = ShowBoneSelectDialog(boneNames.ToArray(), targetBone);
+					if (result == null) return; // Cancelled
+					targetBone = result;
+				}
+				
+				int successCount = 0;
+				var allTextureNames = new List<string>();
+				
+				for (int i = 0; i < xacFileNames.Count; i++)
+				{
+					var attachmentXac = FileFormats.XAC.XacFile.Load(xacFileData[i]);
+					
+					if (attachmentXac.Meshes == null || attachmentXac.Meshes.Count == 0)
+						continue;
+					
+					if (_modelViewer.AddAttachmentMesh(attachmentXac, targetBone))
+					{
+						successCount++;
+						
+						// Collect texture names
+						var textureNames = _modelViewer.AttachmentTextureNames;
+						if (textureNames != null)
+						{
+							foreach (var tex in textureNames)
+							{
+								if (!allTextureNames.Contains(tex))
+									allTextureNames.Add(tex);
+							}
+						}
+					}
+				}
+				
+				if (successCount > 0)
+				{
+					string msg = $"Added {successCount} attachment(s) to '{targetBone}'";
+					if (allTextureNames.Count > 0)
+					{
+						msg += $"\n\nRequired texture(s):\n• {string.Join("\n• ", allTextureNames)}";
+						msg += "\n\nSelect texture files and right-click → 'Apply as Texture to Face/Attachment'";
+					}
+					LblFileName.Text = $"Attachments added: {successCount} → {targetBone}";
+					MessageBox.Show(msg, "Attachments Added", MessageBoxButtons.OK, MessageBoxIcon.Information);
+				}
+				else
+				{
+					MessageBox.Show($"Failed to add attachments. Check that the model has bone '{targetBone}'.", 
+						"Apply Attachment", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				}
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show($"Failed to load attachment:\n{ex.Message}", 
+					"Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+		
+		/// <summary>
+		/// Show a dialog to let user select a bone
+		/// </summary>
+		private string ShowBoneSelectDialog(string[] boneNames, string defaultSelection)
+		{
+			using (var form = new Form())
+			{
+				form.Text = "Select Target Bone";
+				form.Width = 300;
+				form.Height = 400;
+				form.StartPosition = FormStartPosition.CenterParent;
+				form.FormBorderStyle = FormBorderStyle.FixedDialog;
+				form.MaximizeBox = false;
+				form.MinimizeBox = false;
+				
+				var label = new Label() { Left = 10, Top = 10, Width = 260, Text = "Select the bone to attach to:" };
+				var listBox = new ListBox() { Left = 10, Top = 35, Width = 260, Height = 280 };
+				var btnOk = new Button() { Text = "OK", Left = 100, Top = 325, Width = 80, DialogResult = DialogResult.OK };
+				var btnCancel = new Button() { Text = "Cancel", Left = 190, Top = 325, Width = 80, DialogResult = DialogResult.Cancel };
+				
+				foreach (var name in boneNames)
+					listBox.Items.Add(name);
+				
+				// Select default or "Bip01 Head"
+				if (!string.IsNullOrEmpty(defaultSelection) && listBox.Items.Contains(defaultSelection))
+					listBox.SelectedItem = defaultSelection;
+				else if (listBox.Items.Contains("Bip01 Head"))
+					listBox.SelectedItem = "Bip01 Head";
+				else if (listBox.Items.Count > 0)
+					listBox.SelectedIndex = 0;
+				
+				form.Controls.Add(label);
+				form.Controls.Add(listBox);
+				form.Controls.Add(btnOk);
+				form.Controls.Add(btnCancel);
+				form.AcceptButton = btnOk;
+				form.CancelButton = btnCancel;
+				
+				if (form.ShowDialog() == DialogResult.OK && listBox.SelectedItem != null)
+				{
+					return listBox.SelectedItem.ToString();
+				}
+				return null;
+			}
+		}
+		
+		/// <summary>
+		/// Apply XSM animation to the currently loaded 3D model
+		/// </summary>
+		private void ApplyAnimationToModel_Click(object sender, EventArgs e)
+		{
+			if (_modelViewer == null || !_modelViewer.HasModel)
+			{
+				MessageBox.Show("No 3D model is currently displayed. Please load a body model first.", 
+					"Apply Animation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return;
+			}
+			
+			if (LstFiles.SelectedItems.Count == 0) return;
+			
+			var selected = LstFiles.SelectedItems[0];
+			var fileTag = selected.Tag;
+			
+			// Check extension
+			string filePath;
+			if (fileTag is IpfFile ipfFile)
+			{
+				filePath = ipfFile.FullPath;
+			}
+			else if (fileTag is string tagStr)
+			{
+				filePath = tagStr;
+			}
+			else
+			{
+				return;
+			}
+			
+			var ext = Path.GetExtension(filePath).ToLowerInvariant();
+			if (ext != ".xsm")
+			{
+				MessageBox.Show("Please select an XSM animation file.", 
+					"Apply Animation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return;
+			}
+			
+			try
+			{
+				byte[] animationData = null;
+				
+				// Get data from the file
+				if (fileTag is IpfFile ipf)
+				{
+					animationData = ipf.GetData();
+				}
+				else if (fileTag is string tagString)
+				{
+					// Check additional files first
+					if (_additionalFiles.TryGetValue(tagString, out var additionalFile))
+					{
+						animationData = additionalFile.GetData();
+					}
+					else if (_files.TryGetValue(tagString, out var mainFile))
+					{
+						animationData = mainFile.GetData();
+					}
+				}
+				
+				if (animationData == null)
+				{
+					MessageBox.Show("Could not read animation file data.", 
+						"Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+					return;
+				}
+				
+				var xsm = FileFormats.XSM.XsmFile.Load(animationData);
+				
+				if (xsm.MotionParts == null || xsm.MotionParts.Count == 0)
+				{
+					MessageBox.Show("The selected file does not contain any animation data.", 
+						"Apply Animation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+					return;
+				}
+				
+				_modelViewer.LoadAnimation(xsm);
+				_modelViewer.PlayAnimation();
+				
+				var fileName = Path.GetFileName(filePath);
+				var duration = _modelViewer.GetAnimationDuration();
+				LblFileName.Text = $"Animation: {fileName} ({duration:F1}s)";
+				
+				MessageBox.Show(
+					$"Animation loaded: {fileName}\n" +
+					$"Duration: {duration:F2} seconds\n" +
+					$"Motion parts: {xsm.MotionParts.Count}\n\n" +
+					$"Animation is now playing. Use 'Stop Animation' in the 3D viewer context menu to stop.",
+					"Animation Applied", MessageBoxButtons.OK, MessageBoxIcon.Information);
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show($"Failed to load animation:\n{ex.Message}", 
+					"Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+		
+		/// <summary>
+		/// Show a dialog with the required textures for the currently loaded or selected model
+		/// </summary>
+		private void ShowRequiredTextures_Click(object sender, EventArgs e)
+		{
+			List<string> textures = new List<string>();
+			string modelName = "Current Model";
+			
+			// First check if an XAC file is selected
+			if (LstFiles.SelectedItems.Count > 0)
+			{
+				var selected = LstFiles.SelectedItems[0];
+				var fileTag = selected.Tag;
+				
+				string filePath;
+				if (fileTag is IpfFile ipfFile)
+				{
+					filePath = ipfFile.FullPath;
+				}
+				else if (fileTag is string tagStr)
+				{
+					filePath = tagStr;
+				}
+				else
+				{
+					filePath = "";
+				}
+				
+				var ext = Path.GetExtension(filePath).ToLowerInvariant();
+				
+				if (ext == ".xac")
+				{
+					// Load the XAC and extract texture names
+					try
+					{
+						byte[] xacData = null;
+						
+						if (fileTag is IpfFile ipf)
+						{
+							xacData = ipf.GetData();
+						}
+						else if (fileTag is string tagString)
+						{
+							if (_additionalFiles.TryGetValue(tagString, out var additionalFile))
+							{
+								xacData = additionalFile.GetData();
+							}
+							else if (_files.TryGetValue(tagString, out var mainFile))
+							{
+								xacData = mainFile.GetData();
+							}
+						}
+						
+						if (xacData != null)
+						{
+							var xac = FileFormats.XAC.XacFile.Load(xacData);
+							textures = xac.GetAllDiffuseTextures();
+							modelName = Path.GetFileName(filePath);
+						}
+					}
+					catch (Exception ex)
+					{
+						MessageBox.Show($"Failed to read XAC file:\n{ex.Message}", 
+							"Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+						return;
+					}
+				}
+			}
+			
+			// If no XAC selected, show textures from currently displayed model
+			if (textures.Count == 0 && _modelViewer != null && _modelViewer.HasModel)
+			{
+				textures = _modelViewer.RequiredTextures.ToList();
+				modelName = "Currently Displayed Model";
+			}
+			
+			if (textures.Count == 0)
+			{
+				MessageBox.Show("No texture references found in the model.\n\n" +
+					"Note: Some models may reference textures by material name rather than filename.", 
+					"Required Textures", MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+			
+			// Show a dialog with the texture list
+			using (var form = new Form())
+			{
+				form.Text = $"Required Textures - {modelName}";
+				form.Width = 450;
+				form.Height = 400;
+				form.StartPosition = FormStartPosition.CenterParent;
+				form.FormBorderStyle = FormBorderStyle.Sizable;
+				form.MinimizeBox = false;
+				
+				var label = new Label() 
+				{ 
+					Left = 10, Top = 10, Width = 410, 
+					Text = $"The model references {textures.Count} texture(s):\n" +
+						"Right-click on a matching DDS/TGA file and select 'Apply as Texture' to apply." 
+				};
+				label.Height = 40;
+				
+				var listBox = new ListBox() 
+				{ 
+					Left = 10, Top = 55, Width = 410, Height = 260,
+					Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+					HorizontalScrollbar = true
+				};
+				
+				foreach (var tex in textures.OrderBy(t => t))
+					listBox.Items.Add(tex);
+				
+				var btnCopy = new Button() 
+				{ 
+					Text = "Copy to Clipboard", 
+					Left = 10, Top = 325, Width = 120,
+					Anchor = AnchorStyles.Bottom | AnchorStyles.Left
+				};
+				btnCopy.Click += (s, ev) => 
+				{
+					Clipboard.SetText(string.Join("\n", textures));
+					MessageBox.Show("Texture list copied to clipboard.", "Copied", MessageBoxButtons.OK, MessageBoxIcon.Information);
+				};
+				
+				var btnClose = new Button() 
+				{ 
+					Text = "Close", 
+					Left = 340, Top = 325, Width = 80,
+					DialogResult = DialogResult.OK,
+					Anchor = AnchorStyles.Bottom | AnchorStyles.Right
+				};
+				
+				form.Controls.Add(label);
+				form.Controls.Add(listBox);
+				form.Controls.Add(btnCopy);
+				form.Controls.Add(btnClose);
+				form.AcceptButton = btnClose;
+				
+				form.ShowDialog();
+			}
+		}
+
+		/// <summary>
+		/// Load an additional IPF file (for textures, models, etc.)
+		/// </summary>
+		private void LoadAdditionalIpf_Click(object sender, EventArgs e)
+		{
+			using (var ofd = new OpenFileDialog())
+			{
+				ofd.Filter = "IPF Files (*.ipf)|*.ipf|All Files (*.*)|*.*";
+				ofd.Title = "Select additional IPF file to load";
+				ofd.Multiselect = true; // Allow selecting multiple IPFs at once
+				
+				if (ofd.ShowDialog() != DialogResult.OK) return;
+				
+				int loadedCount = 0;
+				foreach (var fileName in ofd.FileNames)
+				{
+					try
+					{
+						// Load IPF
+						var ipf = new Ipf(fileName);
+						ipf.Load();
+						_additionalIpfs.Add(ipf);
+						
+						// Build file dictionary with unique prefix
+						var ipfId = $"IPF{_additionalIpfs.Count}";
+						foreach (var ipfFile in ipf.Files)
+						{
+							_additionalFiles[$"{ipfId}:{ipfFile.FullPath}"] = ipfFile;
+						}
+						
+						// Add IPF to tree view as a new root node
+						var ipfName = System.IO.Path.GetFileName(fileName);
+						var rootNode = new TreeNode(ipfName)
+						{
+							ImageIndex = 3, // compress.png icon
+							SelectedImageIndex = 3,
+							Tag = $"{ipfId}:ROOT"
+						};
+						
+						// Build folder structure for this IPF
+						var folderNodes = new Dictionary<string, TreeNode>();
+						foreach (var ipfFile in ipf.Files)
+						{
+							var parts = ipfFile.FullPath.Split('/');
+							var currentPath = "";
+							TreeNode parentNode = rootNode;
+							
+							for (int i = 0; i < parts.Length - 1; i++) // Skip the file name
+							{
+								currentPath += (i > 0 ? "/" : "") + parts[i];
+								var folderKey = $"{ipfId}:{currentPath}";
+								
+								if (!folderNodes.ContainsKey(folderKey))
+								{
+									var folderNode = new TreeNode(parts[i])
+									{
+										ImageIndex = 2, // folder icon
+										SelectedImageIndex = 2,
+										Tag = folderKey
+									};
+									parentNode.Nodes.Add(folderNode);
+									folderNodes[folderKey] = folderNode;
+								}
+								parentNode = folderNodes[folderKey];
+							}
+						}
+						
+						TreeFolders.Nodes.Add(rootNode);
+						loadedCount++;
+					}
+					catch (Exception ex)
+					{
+						MessageBox.Show($"Error loading {Path.GetFileName(fileName)}:\n{ex.Message}", "Error", 
+							MessageBoxButtons.OK, MessageBoxIcon.Error);
+					}
+				}
+				
+				if (loadedCount > 0)
+				{
+					MessageBox.Show($"Loaded {loadedCount} additional IPF(s).\n\nRight-click on a DDS/TGA file and select 'Apply as Texture to 3D Model' to apply it.", 
+						"Load Additional IPF", MessageBoxButtons.OK, MessageBoxIcon.Information);
+				}
+			}
+		}
+		
+		/// <summary>
+		/// Close all additional IPFs
+		/// </summary>
+		private void CloseAdditionalIpfs_Click(object sender, EventArgs e)
+		{
+			if (_additionalIpfs.Count == 0)
+			{
+				MessageBox.Show("No additional IPFs are loaded.", "Close Additional IPFs", 
+					MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+			
+			// Remove additional IPF nodes from tree
+			for (int i = TreeFolders.Nodes.Count - 1; i >= 0; i--)
+			{
+				var tag = TreeFolders.Nodes[i].Tag?.ToString() ?? "";
+				if (tag.StartsWith("IPF") && tag.Contains(":"))
+				{
+					TreeFolders.Nodes.RemoveAt(i);
+				}
+			}
+			
+			_additionalIpfs.Clear();
+			_additionalFiles.Clear();
+			
+			MessageBox.Show("All additional IPFs closed.", "Close Additional IPFs", 
+				MessageBoxButtons.OK, MessageBoxIcon.Information);
+		}
+
+		/// <summary>
+		/// Import any file into the current IPF
+		/// </summary>
+		private void ImportIesFile_Click(object sender, EventArgs e)
+		{
+			if (_openedIpf == null)
+			{
+				MessageBox.Show("Please open an IPF file first.", "Import File", 
+					MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return;
+			}
+
+			// Get the current folder from tree selection for destination path
+			string currentFolder = "";
+			if (TreeFolders.SelectedNode != null)
+			{
+				currentFolder = TreeFolders.SelectedNode.FullPath.Replace("\\", "/");
+				// Remove IPF prefix if from additional IPF
+				if (currentFolder.StartsWith("IPF"))
+				{
+					var colonIndex = currentFolder.IndexOf(':');
+					if (colonIndex > 0)
+						currentFolder = currentFolder.Substring(colonIndex + 1).TrimStart('/');
+				}
+			}
+
+			// If no folder selected, use the first pack name from the IPF
+			if (string.IsNullOrEmpty(currentFolder))
+			{
+				currentFolder = _openedIpf.Files.FirstOrDefault()?.PackFileName ?? "data";
+			}
+
+			// Ask user for the file(s) to import
+			using (var openDialog = new OpenFileDialog())
+			{
+				openDialog.Title = "Select file(s) to import";
+				openDialog.Filter = "All files|*.*|IES files|*.ies|XML files|*.xml|DDS textures|*.dds|XAC models|*.xac|LUA scripts|*.lua";
+				openDialog.Multiselect = true;
+
+				if (openDialog.ShowDialog() != DialogResult.OK)
+					return;
+
+				int importedCount = 0;
+				int skippedCount = 0;
+
+				foreach (var filePath in openDialog.FileNames)
+				{
+					try
+					{
+						var fileName = Path.GetFileName(filePath);
+						var extension = Path.GetExtension(filePath).ToLowerInvariant();
+						byte[] fileBytes;
+
+						if (extension == ".xml")
+						{
+							// Special handling: Convert XML to IES binary
+							var xml = File.ReadAllText(filePath);
+							var iesFile = IesFile.LoadFromXmlString(xml);
+							fileBytes = iesFile.SaveToBytes();
+							fileName = Path.GetFileNameWithoutExtension(fileName) + ".ies";
+						}
+						else
+						{
+							// Read file as raw bytes
+							fileBytes = File.ReadAllBytes(filePath);
+						}
+
+						// Build destination path: currentFolder/filename
+						var destPath = currentFolder + "/" + fileName;
+
+						// Check if file already exists
+						if (_files.ContainsKey(destPath) || _importedFiles.ContainsKey(destPath))
+						{
+							var result = MessageBox.Show(
+								$"A file already exists at '{destPath}'.\nDo you want to replace it?",
+								"File Exists", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+							
+							if (result != DialogResult.Yes)
+							{
+								skippedCount++;
+								continue;
+							}
+						}
+
+						// Add to imported files (temporary until saved)
+						_importedFiles[destPath] = fileBytes;
+
+						// Add to file tree for visualization
+						AddImportedFileToTree(destPath);
+
+						// Refresh the file list if we're viewing the target folder
+						if (TreeFolders.SelectedNode != null)
+						{
+							var selectedPath = TreeFolders.SelectedNode.FullPath.Replace("\\", "/");
+							if (destPath.StartsWith(selectedPath + "/") || selectedPath == currentFolder)
+							{
+								// Refresh file list to show the imported file
+								TreeFolders_AfterSelect(TreeFolders, new TreeViewEventArgs(TreeFolders.SelectedNode));
+							}
+						}
+
+						importedCount++;
+					}
+					catch (Exception ex)
+					{
+						MessageBox.Show($"Failed to import '{Path.GetFileName(filePath)}':\n{ex.Message}",
+							"Import Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+					}
+				}
+
+				UpdatePendingChangesUI();
+
+				// Show summary
+				if (importedCount > 0)
+				{
+					var msg = $"Imported {importedCount} file(s) to '{currentFolder}'.";
+					if (skippedCount > 0)
+						msg += $"\n{skippedCount} file(s) were skipped.";
+					msg += "\n\nFiles are temporarily added. Use 'Save IES' to save to IPF.";
+					MessageBox.Show(msg, "Import Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+				}
+			}
+		}
+
+		/// <summary>
+		/// Add an imported file to the tree view for visualization
+		/// </summary>
+		private void AddImportedFileToTree(string fullPath)
+		{
+			var parts = fullPath.Split('/');
+			TreeNode currentNode = null;
+
+			for (int i = 0; i < parts.Length; i++)
+			{
+				var part = parts[i];
+				TreeNodeCollection nodes = currentNode == null ? TreeFolders.Nodes : currentNode.Nodes;
+
+				// Find or create node
+				TreeNode found = null;
+				foreach (TreeNode node in nodes)
+				{
+					if (node.Text == part)
+					{
+						found = node;
+						break;
+					}
+				}
+
+				if (found == null)
+				{
+					found = new TreeNode(part);
+					if (i < parts.Length - 1)
+					{
+						// Folder
+						found.ImageKey = "folder";
+						found.SelectedImageKey = "folder_open";
+					}
+					else
+					{
+						// File node - mark as imported
+						found.ImageKey = "imported";
+						found.ForeColor = Color.Green;
+						found.Tag = "IMPORTED:" + fullPath;
+					}
+					nodes.Add(found);
+				}
+				else if (i == parts.Length - 1)
+				{
+					// Update existing node to show as imported
+					found.ForeColor = Color.Green;
+					found.Tag = "IMPORTED:" + fullPath;
+				}
+
+				currentNode = found;
+			}
+
+			// Add to folder list for display in file list
+			var folderPath = string.Join("/", parts.Take(parts.Length - 1));
+			if (!_folders.ContainsKey(folderPath))
+				_folders[folderPath] = new List<string>();
+			
+			if (!_folders[folderPath].Contains(fullPath))
+				_folders[folderPath].Add(fullPath);
+		}
+		
+		/// <summary>
+		/// Context menu opening - enable/disable items based on selection
+		/// </summary>
+		private void FileListContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+		{
+			if (LstFiles.SelectedItems.Count == 0)
+			{
+				e.Cancel = true;
+				return;
+			}
+			
+			var selected = LstFiles.SelectedItems[0];
+			var fileTag = selected.Tag;
+			string filePath = "";
+			
+			if (fileTag is IpfFile ipf)
+				filePath = ipf.FullPath;
+			else if (fileTag is string s)
+				filePath = s;
+			
+			var ext = Path.GetExtension(filePath).ToLowerInvariant();
+			
+			// Show "Apply as Texture" for image files when a model has been loaded
+			var isTexture = ext == ".dds" || ext == ".tga" || ext == ".png" || ext == ".jpg" || ext == ".bmp";
+			var isXac = ext == ".xac";
+			var isXsm = ext == ".xsm";
+			var hasModel = _modelViewer != null && _modelViewer.HasModel;
+			var hasAttachments = _modelViewer != null && _modelViewer.HasAttachments;
+			
+			// Index 0: Apply as Texture to Body
+			_fileListContextMenu.Items[0].Visible = isTexture && hasModel;
+			_fileListContextMenu.Items[0].Enabled = isTexture && hasModel;
+			
+			// Index 1: Apply as Texture to Face/Attachment
+			_fileListContextMenu.Items[1].Visible = isTexture && hasModel && hasAttachments;
+			_fileListContextMenu.Items[1].Enabled = isTexture && hasModel && hasAttachments;
+			
+			// Index 2: Apply as Attachment (for XAC files when model is loaded)
+			_fileListContextMenu.Items[2].Visible = isXac && hasModel;
+			_fileListContextMenu.Items[2].Enabled = isXac && hasModel;
+			
+			// Index 3: Apply Animation to Model (for XSM files when model is loaded)
+			_fileListContextMenu.Items[3].Visible = isXsm && hasModel;
+			_fileListContextMenu.Items[3].Enabled = isXsm && hasModel;
+			
+			// Index 4: Show Required Textures (for XAC files, or when viewing a model)
+			_fileListContextMenu.Items[4].Visible = isXac || (hasModel && !isTexture && !isXsm);
+			_fileListContextMenu.Items[4].Enabled = isXac || hasModel;
+
+			// Index 5: Separator - show if any of the above options visible
+			_fileListContextMenu.Items[5].Visible = (isTexture || isXac || isXsm) && hasModel || isXac;
+
+			// Index 6: Extract File - always visible
+			// Index 7: Remove Imported File
+			var fileTagStr = filePath;
+			var isImported = _importedFiles.ContainsKey(fileTagStr);
+			_fileListContextMenu.Items[7].Visible = isImported;
+			_fileListContextMenu.Items[7].Enabled = isImported;
+
+			// Index 8: Separator
+			// Index 9: Delete File from IPF
+			var isMainIpfFile = _files.ContainsKey(fileTagStr) && !isImported;
+			var isAlreadyDeleted = _deletedFiles.Contains(fileTagStr);
+			_fileListContextMenu.Items[9].Visible = isMainIpfFile;
+			_fileListContextMenu.Items[9].Enabled = isMainIpfFile && !isAlreadyDeleted;
+			
+			if (isAlreadyDeleted)
+				_fileListContextMenu.Items[9].Text = "Already marked for deletion";
+			else
+				_fileListContextMenu.Items[9].Text = "Delete File from IPF";
+		}
+		
+		/// <summary>
+		/// Remove an imported file from the import list
+		/// </summary>
+		private void RemoveImportedFile_Click(object sender, EventArgs e)
+		{
+			if (LstFiles.SelectedItems.Count == 0) return;
+			
+			var selected = LstFiles.SelectedItems[0];
+			var fileTag = (string)selected.Tag;
+			
+			if (!_importedFiles.ContainsKey(fileTag))
+				return;
+			
+			var result = MessageBox.Show(
+				$"Remove imported file '{Path.GetFileName(fileTag)}'?\n\nThis file has not been saved to the IPF yet.",
+				"Remove Imported File", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+			
+			if (result != DialogResult.Yes)
+				return;
+			
+			// Remove from imports
+			_importedFiles.Remove(fileTag);
+			
+			// If currently editing this file, stop editing
+			if (_currentIesFilePath == fileTag)
+			{
+				_pendingChanges.Remove(fileTag);
+				_isEditingIes = false;
+				_currentIesFilePath = null;
+				ResetPreview();
+			}
+			
+			// Remove from tree
+			RemoveImportedFileFromTree(fileTag);
+			
+			// Refresh file list
+			if (TreeFolders.SelectedNode != null)
+				TreeFolders_AfterSelect(TreeFolders, new TreeViewEventArgs(TreeFolders.SelectedNode));
+			
+			UpdatePendingChangesUI();
+		}
+
+		/// <summary>
+		/// Mark a file for deletion from the IPF
+		/// </summary>
+		private void DeleteFileFromIpf_Click(object sender, EventArgs e)
+		{
+			if (LstFiles.SelectedItems.Count == 0) return;
+			
+			var selected = LstFiles.SelectedItems[0];
+			var fileTag = (string)selected.Tag;
+			
+			if (!_files.ContainsKey(fileTag))
+				return;
+			
+			if (_deletedFiles.Contains(fileTag))
+			{
+				MessageBox.Show("This file is already marked for deletion.", "Delete File", 
+					MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+			
+			var result = MessageBox.Show(
+				$"Mark '{Path.GetFileName(fileTag)}' for deletion?\n\nThe file will be removed from the IPF when you save.",
+				"Delete File", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+			
+			if (result != DialogResult.Yes)
+				return;
+			
+			// Mark for deletion
+			_deletedFiles.Add(fileTag);
+			
+			// Also remove from pending changes if it was modified
+			_pendingChanges.Remove(fileTag);
+			
+			// If currently editing this file, stop editing
+			if (_currentIesFilePath == fileTag)
+			{
+				_isEditingIes = false;
+				_currentIesFilePath = null;
+				ResetPreview();
+			}
+			
+			// Refresh file list to show deletion indicator
+			if (TreeFolders.SelectedNode != null)
+				TreeFolders_AfterSelect(TreeFolders, new TreeViewEventArgs(TreeFolders.SelectedNode));
+			
+			UpdatePendingChangesUI();
+		}
+		
+		/// <summary>
+		/// Apply selected texture to the 3D model
+		/// </summary>
+		private void ApplyTextureToModel_Click(object sender, EventArgs e)
+		{
+			if (LstFiles.SelectedItems.Count == 0) return;
+			if (_modelViewer == null) return;
+			
+			// Make sure the model viewer has a model loaded
+			if (!_modelViewer.HasModel)
+			{
+				MessageBox.Show("No 3D model is loaded. Please load an XAC file first.", "No Model", 
+					MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return;
+			}
+			
+			var selected = LstFiles.SelectedItems[0];
+			var fileTag = selected.Tag;
+			
+			// Get the file path and data
+			string filePath = null;
+			byte[] textureData = null;
+			
+			if (fileTag is string tagStr)
+			{
+				filePath = tagStr;
+				// Try to find in additional files first (for loaded IPFs)
+				if (tagStr.StartsWith("IPF") && tagStr.Contains(":"))
+				{
+					if (_additionalFiles.TryGetValue(tagStr, out var additionalFile))
+					{
+						textureData = additionalFile.GetData();
+						filePath = tagStr.Substring(tagStr.IndexOf(':') + 1);
+					}
+				}
+				else if (_files.TryGetValue(tagStr, out var mainFile))
+				{
+					textureData = mainFile.GetData();
+				}
+			}
+			
+			if (string.IsNullOrEmpty(filePath))
+			{
+				MessageBox.Show("Could not determine file path.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+				return;
+			}
+			
+			if (textureData == null)
+			{
+				MessageBox.Show($"Could not read file data for:\n{filePath}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+				return;
+			}
+			
+			try
+			{
+				Bitmap bitmap = null;
+				var ext = Path.GetExtension(filePath).ToLowerInvariant();
+				
+				if (ext == ".dds")
+				{
+					try
+					{
+						var dds = new DDSImage(textureData);
+						bitmap = dds.BitmapImage;
+					}
+					catch (Exception ddsEx)
+					{
+						throw new Exception($"DDS decode error: {ddsEx.Message}");
+					}
+					if (bitmap == null)
+					{
+						throw new Exception("Unable to decode DDS image - unsupported format");
+					}
+				}
+				else if (ext == ".tga")
+				{
+					using (var ms = new MemoryStream(textureData))
+					{
+						var tga = new TargaImage(ms);
+						bitmap = new Bitmap(tga.Image);
+					}
+				}
+				else if (ext == ".png" || ext == ".jpg" || ext == ".bmp")
+				{
+					using (var ms = new MemoryStream(textureData))
+					{
+						bitmap = new Bitmap(Image.FromStream(ms));
+					}
+				}
+				
+				if (bitmap != null)
+				{
+					// Ask which material to apply to (if multiple materials)
+					int materialId = 0;
+					if (_modelViewer.Materials.Count > 1)
+					{
+						var materialNames = _modelViewer.Materials.Select((m, i) => $"{i}: {m.Name}").ToArray();
+						var result = ShowMaterialSelectDialog(materialNames);
+						if (result < 0) return;
+						materialId = result;
+					}
+					
+					_modelViewer.LoadTexture(materialId, bitmap);
+					bitmap.Dispose();
+					
+					// Show the model viewer with the new texture
+					_modelViewer.Visible = true;
+					_modelViewer.BringToFront();
+					
+					MessageBox.Show($"Texture applied to body!", "Apply Texture", 
+						MessageBoxButtons.OK, MessageBoxIcon.Information);
+				}
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show($"Error loading texture:\n{ex.Message}", "Error", 
+					MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+		
+		/// <summary>
+		/// Apply selected texture to the face/attachment meshes only
+		/// </summary>
+		private void ApplyTextureToAttachment_Click(object sender, EventArgs e)
+		{
+			if (LstFiles.SelectedItems.Count == 0) return;
+			if (_modelViewer == null || !_modelViewer.HasModel || !_modelViewer.HasAttachments)
+			{
+				MessageBox.Show("No attachments loaded. Add a face/hair first.", "No Attachments", 
+					MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return;
+			}
+			
+			int successCount = 0;
+			int failCount = 0;
+			string lastError = null;
+			
+			// Process all selected items (multi-select support)
+			foreach (ListViewItem selected in LstFiles.SelectedItems)
+			{
+				var fileTag = selected.Tag;
+				
+				// Get the file path and data
+				string filePath = null;
+				byte[] textureData = null;
+				
+				if (fileTag is string tagStr)
+				{
+					filePath = tagStr;
+					// Try to find in additional files first (for loaded IPFs like char_texture.ipf)
+					if (tagStr.StartsWith("IPF") && tagStr.Contains(":"))
+					{
+						if (_additionalFiles.TryGetValue(tagStr, out var additionalFile))
+						{
+							textureData = additionalFile.GetData();
+							// For display, use the path after the colon
+							filePath = tagStr.Substring(tagStr.IndexOf(':') + 1);
+						}
+					}
+					else if (_files.TryGetValue(tagStr, out var mainFile))
+					{
+						textureData = mainFile.GetData();
+					}
+					else if (File.Exists(tagStr))
+					{
+						// Fallback: read directly from filesystem for extracted/loose files
+						textureData = File.ReadAllBytes(tagStr);
+					}
+				}
+				
+				if (string.IsNullOrEmpty(filePath) || textureData == null)
+				{
+					failCount++;
+					lastError = $"Could not read: {filePath ?? "unknown"}";
+					continue;
+				}
+				
+				// Only process texture files
+				var ext = Path.GetExtension(filePath).ToLowerInvariant();
+				if (ext != ".dds" && ext != ".tga" && ext != ".png" && ext != ".jpg" && ext != ".bmp")
+				{
+					continue; // Skip non-texture files silently
+				}
+				
+				try
+				{
+					Bitmap bitmap = null;
+					
+					if (ext == ".dds")
+					{
+						var dds = new DDSImage(textureData);
+						bitmap = dds.BitmapImage;
+						if (bitmap == null)
+						{
+							failCount++;
+							lastError = $"DDS decode failed: {Path.GetFileName(filePath)}";
+							continue;
+						}
+					}
+					else if (ext == ".tga")
+					{
+						using (var ms = new MemoryStream(textureData))
+						{
+							var tga = new TargaImage(ms);
+							bitmap = new Bitmap(tga.Image);
+						}
+					}
+					else
+					{
+						using (var ms = new MemoryStream(textureData))
+						{
+							bitmap = new Bitmap(Image.FromStream(ms));
+						}
+					}
+					
+					if (bitmap != null)
+					{
+						string textureFileName = Path.GetFileName(filePath);
+						_modelViewer.LoadAttachmentTexture(bitmap, textureFileName);
+						successCount++;
+						bitmap.Dispose();
+					}
+				}
+				catch (Exception ex)
+				{
+					failCount++;
+					lastError = $"{Path.GetFileName(filePath)}: {ex.Message}";
+				}
+			}
+			
+			if (successCount > 0)
+			{
+				_modelViewer.Visible = true;
+				_modelViewer.BringToFront();
+			}
+			
+			// Show summary if multiple files or if there were errors
+			if (LstFiles.SelectedItems.Count > 1 || failCount > 0)
+			{
+				string msg = $"Applied {successCount} texture(s)";
+				if (failCount > 0)
+				{
+					msg += $"\nFailed: {failCount}";
+					if (lastError != null)
+						msg += $"\nLast error: {lastError}";
+				}
+				MessageBox.Show(msg, "Texture Application", MessageBoxButtons.OK, 
+					failCount > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+			}
+		}
+		
+		/// <summary>
+		/// Show a dialog to select which material to apply texture to
+		/// </summary>
+		private int ShowMaterialSelectDialog(string[] materials)
+		{
+			using (var form = new Form())
+			{
+				form.Text = "Select Material";
+				form.Size = new Size(300, 150);
+				form.StartPosition = FormStartPosition.CenterParent;
+				form.FormBorderStyle = FormBorderStyle.FixedDialog;
+				form.MaximizeBox = false;
+				form.MinimizeBox = false;
+				
+				var label = new Label { Text = "Select material to apply texture to:", Left = 10, Top = 10, Width = 270 };
+				var combo = new ComboBox { Left = 10, Top = 35, Width = 270, DropDownStyle = ComboBoxStyle.DropDownList };
+				combo.Items.AddRange(materials);
+				combo.SelectedIndex = 0;
+				
+				var okBtn = new Button { Text = "OK", Left = 120, Top = 70, Width = 75, DialogResult = DialogResult.OK };
+				var cancelBtn = new Button { Text = "Cancel", Left = 205, Top = 70, Width = 75, DialogResult = DialogResult.Cancel };
+				
+				form.Controls.AddRange(new Control[] { label, combo, okBtn, cancelBtn });
+				form.AcceptButton = okBtn;
+				form.CancelButton = cancelBtn;
+				
+				if (form.ShowDialog() == DialogResult.OK)
+					return combo.SelectedIndex;
+				return -1;
+			}
 		}
 
 		/// <summary>
@@ -719,20 +2815,41 @@ namespace IPFBrowser
 				return;
 
 			var selected = LstFiles.SelectedItems[0];
-			var filePath = (string)selected.Tag;
-			var ipfFile = _files[filePath];
-			var fileName = Path.GetFileName(filePath);
-			var ext = Path.GetExtension(filePath);
+			var fileTag = (string)selected.Tag;
+			
+			// Try to find the file in main files or additional files
+			IpfFile ipfFile = null;
+			if (fileTag.StartsWith("IPF") && fileTag.Contains(":"))
+			{
+				// This is from an additional IPF
+				if (!_additionalFiles.TryGetValue(fileTag, out ipfFile))
+				{
+					MessageBox.Show("Could not find file in additional IPFs.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+					return;
+				}
+			}
+			else
+			{
+				// This is from the main IPF
+				if (!_files.TryGetValue(fileTag, out ipfFile))
+				{
+					MessageBox.Show("Could not find file in main IPF.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+					return;
+				}
+			}
+			
+			var fileName = Path.GetFileName(ipfFile.FullPath);
+			var ext = Path.GetExtension(fileName);
 
 			SavExtractFile.FileName = fileName;
 
 			if (SavExtractFile.ShowDialog() != DialogResult.OK)
 				return;
 
-			filePath = SavExtractFile.FileName;
+			var savePath = SavExtractFile.FileName;
 
 			var file = ipfFile.GetData();
-			File.WriteAllBytes(filePath, file);
+			File.WriteAllBytes(savePath, file);
 		}
 
 		/// <summary>
@@ -797,12 +2914,43 @@ namespace IPFBrowser
 		}
 
 		/// <summary>
-		/// Called when program is closed, saves settings.
+		/// Called when program is closed, saves settings and warns about unsaved changes.
 		/// </summary>
 		/// <param name="sender"></param>
 		/// <param name="e"></param>
 		private void FrmMain_FormClosing(object sender, FormClosingEventArgs e)
 		{
+			// Check for unsaved changes
+			if (_pendingChanges.Count > 0 || _isEditingIes)
+			{
+				// Save current editing state
+				if (_isEditingIes && !string.IsNullOrEmpty(_currentIesFilePath))
+				{
+					_pendingChanges[_currentIesFilePath] = TxtPreview.Text;
+				}
+
+				if (_pendingChanges.Count > 0)
+				{
+					var result = MessageBox.Show(
+						$"You have unsaved changes to {_pendingChanges.Count} file(s).\n\nDo you want to save before closing?",
+						Text, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+
+					if (result == DialogResult.Yes)
+					{
+						// Show save menu - but for now just cancel close and let user save manually
+						e.Cancel = true;
+						MnuSave_Click(null, null);
+						return;
+					}
+					else if (result == DialogResult.Cancel)
+					{
+						e.Cancel = true;
+						return;
+					}
+					// DialogResult.No - continue closing without saving
+				}
+			}
+
 			Properties.Settings.Default.Save();
 		}
 
@@ -870,6 +3018,672 @@ namespace IPFBrowser
 			// Show progress window after the thread was started, as it
 			// blocks the main window.
 			frmProgress.ShowDialog();
+		}
+
+		#region IES Editing
+
+		/// <summary>
+		/// Updates the UI to reflect pending changes count.
+		/// </summary>
+		private void UpdatePendingChangesUI()
+		{
+			int totalChanges = _pendingChanges.Count + _importedFiles.Count + _deletedFiles.Count;
+			
+			if (totalChanges > 0)
+			{
+				// Build a description of changes for the menu
+				var parts = new List<string>();
+				if (_pendingChanges.Count > 0) parts.Add($"{_pendingChanges.Count} modified");
+				if (_importedFiles.Count > 0) parts.Add($"{_importedFiles.Count} imported");
+				if (_deletedFiles.Count > 0) parts.Add($"{_deletedFiles.Count} deleted");
+				
+				MnuSave.Text = $"Save ({string.Join(", ", parts)})";
+				MnuSave.Enabled = true;
+				MnuSaveAs.Enabled = true;
+				BtnCancelEdit.Enabled = true;
+			}
+			else
+			{
+				MnuSave.Text = "Save";
+				MnuSave.Enabled = false;
+				MnuSaveAs.Enabled = false;
+				BtnCancelEdit.Enabled = _isEditingIes;
+			}
+		}
+
+		/// <summary>
+		/// Shows the IES editor with the given XML content.
+		/// </summary>
+		private void ShowIesEditor(string filePath, string xml)
+		{
+			_currentIesFilePath = filePath;
+			_currentIesXml = xml;
+			_isEditingIes = true;
+
+			ResetPreview();
+			SetTextPreviewStyle(ScintillaNET.Lexer.Xml);
+
+			TxtPreview.ReadOnly = false;
+			TxtPreview.Text = xml;
+			TxtPreview.Visible = true;
+
+			BtnEditIes.Enabled = false;
+			UpdatePendingChangesUI();
+
+			// Show indicator that this file has pending changes
+			var hasChanges = _pendingChanges.ContainsKey(filePath);
+			LblFileName.Text = filePath + (hasChanges ? " (Modified)" : " (Editing)");
+
+			// Focus the text editor so user can start typing immediately
+			TxtPreview.Focus();
+		}
+
+		/// <summary>
+		/// Called when clicking Edit IES button, opens IES as XML for editing.
+		/// </summary>
+		private void BtnEditIes_Click(object sender, EventArgs e)
+		{
+			if (LstFiles.SelectedIndices.Count == 0)
+				return;
+
+			var selected = LstFiles.SelectedItems[0];
+			var fileName = (string)selected.Tag;
+			var ext = Path.GetExtension(fileName).ToLowerInvariant();
+
+			if (ext != ".ies")
+				return;
+
+			// Check if we already have pending changes for this file
+			if (_pendingChanges.ContainsKey(fileName))
+			{
+				ShowIesEditor(fileName, _pendingChanges[fileName]);
+				return;
+			}
+
+			byte[] iesData;
+			
+			// Check if this is an imported file
+			if (_importedFiles.TryGetValue(fileName, out var importedData))
+			{
+				iesData = importedData;
+			}
+			// Check if from additional IPF
+			else if (fileName.StartsWith("IPF") && fileName.Contains(":"))
+			{
+				if (_additionalFiles.TryGetValue(fileName, out var additionalFile))
+				{
+					iesData = additionalFile.GetData();
+				}
+				else
+				{
+					MessageBox.Show("File not found.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+					return;
+				}
+			}
+			// Normal IPF file
+			else if (_files.TryGetValue(fileName, out var ipfFile))
+			{
+				iesData = ipfFile.GetData();
+			}
+			else
+			{
+				MessageBox.Show("File not found.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+				return;
+			}
+
+			try
+			{
+				var iesFile = new IesFile(iesData);
+				var xml = iesFile.GetXml();
+
+				ShowIesEditor(fileName, xml);
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show("Failed to load IES file: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+
+		/// <summary>
+		/// Save menu click - saves to IPF (overwrite)
+		/// </summary>
+		private void MnuSave_Click(object sender, EventArgs e)
+		{
+			// Save current editing state first
+			if (_isEditingIes && !string.IsNullOrEmpty(_currentIesFilePath))
+			{
+				_pendingChanges[_currentIesFilePath] = TxtPreview.Text;
+			}
+
+			if (_pendingChanges.Count == 0 && _importedFiles.Count == 0 && _deletedFiles.Count == 0)
+			{
+				MessageBox.Show("No changes to save.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			SaveAllToIpf(true);
+		}
+
+		/// <summary>
+		/// Save As menu click - saves to new IPF
+		/// </summary>
+		private void MnuSaveAs_Click(object sender, EventArgs e)
+		{
+			// Save current editing state first
+			if (_isEditingIes && !string.IsNullOrEmpty(_currentIesFilePath))
+			{
+				_pendingChanges[_currentIesFilePath] = TxtPreview.Text;
+			}
+
+			if (_pendingChanges.Count == 0 && _importedFiles.Count == 0 && _deletedFiles.Count == 0)
+			{
+				MessageBox.Show("No changes to save.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			SaveAllToIpf(false);
+		}
+
+		/// <summary>
+		/// Import File menu click - imports files into the current IPF
+		/// </summary>
+		private void MnuImportFile_Click(object sender, EventArgs e)
+		{
+			ImportIesFile_Click(sender, e);
+		}
+
+		/// <summary>
+		/// Discard Changes menu click - discards all pending changes
+		/// </summary>
+		private void MnuDiscardChanges_Click(object sender, EventArgs e)
+		{
+			int total = _pendingChanges.Count + _importedFiles.Count + _deletedFiles.Count;
+			if (total == 0)
+			{
+				MessageBox.Show("No changes to discard.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			var result = MessageBox.Show(
+				$"Discard ALL pending changes?\n\n" +
+				$"• {_pendingChanges.Count} modified file(s)\n" +
+				$"• {_importedFiles.Count} imported file(s)\n" +
+				$"• {_deletedFiles.Count} deleted file(s)\n\n" +
+				"This cannot be undone.",
+				Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+			if (result != DialogResult.Yes)
+				return;
+
+			// Remove imported file nodes from tree
+			RemoveImportedNodesFromTree();
+
+			_pendingChanges.Clear();
+			_importedFiles.Clear();
+			_deletedFiles.Clear();
+			_isEditingIes = false;
+			_currentIesFilePath = null;
+
+			UpdatePendingChangesUI();
+
+			// Refresh file list to remove strikethrough/coloring
+			if (TreeFolders.SelectedNode != null)
+				TreeFolders_AfterSelect(TreeFolders, new TreeViewEventArgs(TreeFolders.SelectedNode));
+
+			// Refresh preview
+			ResetPreview();
+			if (BtnPreview.Checked)
+				Preview();
+
+			if (_openedIpf != null)
+				LblFileName.Text = _openedIpf.FilePath;
+		}
+
+		/// <summary>
+		/// Save the edited IES as an IES binary file.
+		/// </summary>
+		private void SaveAsIesFile()
+		{
+			if (string.IsNullOrEmpty(_currentIesFilePath))
+				return;
+
+			try
+			{
+				// Get current XML (either from editor or pending changes)
+				var xml = _isEditingIes ? TxtPreview.Text : _pendingChanges[_currentIesFilePath];
+				var newIesFile = IesFile.LoadFromXmlString(xml);
+
+				// Get IES binary data
+				var iesBytes = newIesFile.SaveToBytes();
+
+				// Show save dialog
+				var fileName = Path.GetFileName(_currentIesFilePath);
+				SavExtractFile.FileName = fileName;
+				SavExtractFile.Filter = "IES files|*.ies|All files|*.*";
+
+				if (SavExtractFile.ShowDialog() != DialogResult.OK)
+					return;
+
+				var savePath = SavExtractFile.FileName;
+				File.WriteAllBytes(savePath, iesBytes);
+
+				MessageBox.Show("IES file saved successfully!", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show("Failed to save IES file: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+
+		/// <summary>
+		/// Save the edited IES as an XML file.
+		/// </summary>
+		private void SaveAsXmlFile()
+		{
+			if (string.IsNullOrEmpty(_currentIesFilePath))
+				return;
+
+			try
+			{
+				var xml = _isEditingIes ? TxtPreview.Text : _pendingChanges[_currentIesFilePath];
+
+				// Show save dialog
+				var fileName = Path.GetFileNameWithoutExtension(_currentIesFilePath) + ".xml";
+				SavExtractFile.FileName = fileName;
+				SavExtractFile.Filter = "XML files|*.xml|All files|*.*";
+
+				if (SavExtractFile.ShowDialog() != DialogResult.OK)
+					return;
+
+				var savePath = SavExtractFile.FileName;
+				File.WriteAllText(savePath, xml, Encoding.UTF8);
+
+				MessageBox.Show("XML file saved successfully!", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show("Failed to save XML file: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+
+		/// <summary>
+		/// Save all pending IES changes into an IPF file.
+		/// </summary>
+		private void SaveAllToIpf(bool overwrite)
+		{
+			if (_openedIpf == null)
+			{
+				MessageBox.Show("No IPF file is currently open.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return;
+			}
+
+			if (_pendingChanges.Count == 0 && _importedFiles.Count == 0 && _deletedFiles.Count == 0)
+			{
+				MessageBox.Show("No pending changes, imported files, or deletions to save.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			try
+			{
+				// Convert all pending XML changes to IES binary data
+				var updatedFiles = new Dictionary<string, byte[]>();
+				foreach (var kvp in _pendingChanges)
+				{
+					var iesFile = IesFile.LoadFromXmlString(kvp.Value);
+					updatedFiles[kvp.Key] = iesFile.SaveToBytes();
+				}
+
+				string savePath;
+
+				if (overwrite)
+				{
+					// Confirm overwrite
+					var result = MessageBox.Show(
+						$"This will overwrite the current IPF file:\n{_openedIpf.FilePath}\n\nAre you sure?",
+						Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+					
+					if (result != DialogResult.Yes)
+						return;
+
+					// Create temp file, then replace original
+					savePath = _openedIpf.FilePath + ".tmp";
+				}
+				else
+				{
+					// Show save dialog for new IPF
+					var originalIpfName = Path.GetFileName(_openedIpf.FilePath);
+					var suggestedName = Path.GetFileNameWithoutExtension(originalIpfName) + "_modified.ipf";
+					
+					SavExtractFile.FileName = suggestedName;
+					SavExtractFile.Filter = "IPF files|*.ipf|All files|*.*";
+
+					if (SavExtractFile.ShowDialog() != DialogResult.OK)
+						return;
+
+					savePath = SavExtractFile.FileName;
+
+					// Can't save over the currently open file when using "Save As"
+					if (Path.GetFullPath(savePath).Equals(Path.GetFullPath(_openedIpf.FilePath), StringComparison.OrdinalIgnoreCase))
+					{
+						MessageBox.Show("Cannot overwrite the currently open IPF file using 'Save As'. Use 'Save (overwrite)' instead.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+						return;
+					}
+				}
+
+				// Save IPF with updated files, new imported files, and deleted files
+				_openedIpf.SaveWithUpdatedAndNewFiles(savePath, updatedFiles, 
+					_importedFiles.Count > 0 ? _importedFiles : null,
+					_deletedFiles.Count > 0 ? _deletedFiles : null);
+
+				int totalUpdated = updatedFiles.Count;
+				int totalImported = _importedFiles.Count;
+				int totalDeleted = _deletedFiles.Count;
+
+				if (overwrite)
+				{
+					// Close current IPF, replace with temp, reopen
+					var originalPath = _openedIpf.FilePath;
+					_openedIpf.Close();
+					
+					// Replace original with temp
+					File.Delete(originalPath);
+					File.Move(savePath, originalPath);
+
+					// Clear pending changes, imported files, and deletions, then reopen
+					_pendingChanges.Clear();
+					_importedFiles.Clear();
+					_deletedFiles.Clear();
+					_isEditingIes = false;
+					_currentIesFilePath = null;
+					
+					Open(originalPath);
+					
+					var msg = $"IPF file saved successfully!\n\n";
+					if (totalUpdated > 0) msg += $"{totalUpdated} file(s) were updated.\n";
+					if (totalImported > 0) msg += $"{totalImported} file(s) were imported.\n";
+					if (totalDeleted > 0) msg += $"{totalDeleted} file(s) were deleted.";
+					MessageBox.Show(msg.TrimEnd(), Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				}
+				else
+				{
+					var msg = $"IPF file saved successfully!\n\n";
+					if (totalUpdated > 0) msg += $"{totalUpdated} file(s) were updated.\n";
+					if (totalImported > 0) msg += $"{totalImported} file(s) were imported.\n";
+					if (totalDeleted > 0) msg += $"{totalDeleted} file(s) were deleted.";
+					MessageBox.Show(msg.TrimEnd(), Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+					// Ask if user wants to open the new IPF
+					var result = MessageBox.Show("Do you want to open the newly created IPF file?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+					if (result == DialogResult.Yes)
+					{
+						_pendingChanges.Clear();
+						_importedFiles.Clear();
+						_deletedFiles.Clear();
+						_isEditingIes = false;
+						_currentIesFilePath = null;
+						_openedIpf.Close();
+						Open(savePath);
+					}
+				}
+
+				UpdatePendingChangesUI();
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show("Failed to save IPF file: " + ex.Message + "\n\n" + ex.StackTrace, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+
+		/// <summary>
+		/// Called when clicking Cancel button, shows options for canceling.
+		/// </summary>
+		private void BtnCancelEdit_Click(object sender, EventArgs e)
+		{
+			if (_pendingChanges.Count == 0 && _importedFiles.Count == 0 && !_isEditingIes)
+				return;
+
+			// Create context menu with cancel options
+			var menu = new ContextMenuStrip();
+
+			if (_isEditingIes && !string.IsNullOrEmpty(_currentIesFilePath))
+			{
+				menu.Items.Add("Discard current file changes", null, (s, ev) => DiscardCurrentChanges());
+			}
+
+			if (_pendingChanges.Count > 0)
+			{
+				menu.Items.Add($"Discard ALL modified files ({_pendingChanges.Count})", null, (s, ev) => DiscardAllChanges());
+			}
+
+			if (_importedFiles.Count > 0)
+			{
+				menu.Items.Add($"Discard ALL imported files ({_importedFiles.Count})", null, (s, ev) => DiscardAllImports());
+			}
+
+			if (_pendingChanges.Count > 0 || _importedFiles.Count > 0)
+			{
+				menu.Items.Add(new ToolStripSeparator());
+				menu.Items.Add("Discard EVERYTHING", null, (s, ev) => DiscardEverything());
+			}
+
+			// Show menu below the button
+			var btn = BtnCancelEdit;
+			menu.Show(toolStrip1, btn.Bounds.Left, btn.Bounds.Bottom);
+		}
+
+		/// <summary>
+		/// Discards changes for the current file only.
+		/// </summary>
+		private void DiscardCurrentChanges()
+		{
+			if (string.IsNullOrEmpty(_currentIesFilePath))
+				return;
+
+			// Check if this is an imported file (not yet in the original IPF)
+			bool isImportedFile = _importedFiles.ContainsKey(_currentIesFilePath);
+			
+			string message = isImportedFile
+				? $"Discard imported file '{Path.GetFileName(_currentIesFilePath)}'?\n\nThis will remove the file completely."
+				: $"Discard changes to '{Path.GetFileName(_currentIesFilePath)}'?";
+
+			var result = MessageBox.Show(message, Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+			if (result != DialogResult.Yes)
+				return;
+
+			_pendingChanges.Remove(_currentIesFilePath);
+			
+			// If it's an imported file, also remove from imports and tree
+			if (isImportedFile)
+			{
+				_importedFiles.Remove(_currentIesFilePath);
+				RemoveImportedFileFromTree(_currentIesFilePath);
+			}
+			
+			_isEditingIes = false;
+			_currentIesFilePath = null;
+
+			UpdatePendingChangesUI();
+
+			// Refresh file list and preview
+			if (TreeFolders.SelectedNode != null)
+				TreeFolders_AfterSelect(TreeFolders, new TreeViewEventArgs(TreeFolders.SelectedNode));
+			
+			ResetPreview();
+			if (BtnPreview.Checked)
+				Preview();
+			
+			if (_openedIpf != null)
+				LblFileName.Text = _openedIpf.FilePath;
+		}
+
+		/// <summary>
+		/// Discards all pending changes.
+		/// </summary>
+		private void DiscardAllChanges()
+		{
+			var result = MessageBox.Show($"Discard ALL pending changes ({_pendingChanges.Count} file(s))?\n\nThis cannot be undone.", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+			if (result != DialogResult.Yes)
+				return;
+
+			_pendingChanges.Clear();
+			_isEditingIes = false;
+			_currentIesFilePath = null;
+
+			UpdatePendingChangesUI();
+
+			// Refresh preview
+			ResetPreview();
+			if (BtnPreview.Checked)
+				Preview();
+			
+			if (_openedIpf != null)
+				LblFileName.Text = _openedIpf.FilePath;
+		}
+
+		/// <summary>
+		/// Discards all imported files.
+		/// </summary>
+		private void DiscardAllImports()
+		{
+			var result = MessageBox.Show($"Discard ALL imported files ({_importedFiles.Count})?\n\nThis cannot be undone.", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+			if (result != DialogResult.Yes)
+				return;
+
+			// Remove imported file nodes from tree
+			RemoveImportedNodesFromTree();
+			
+			_importedFiles.Clear();
+			UpdatePendingChangesUI();
+		}
+
+		/// <summary>
+		/// Discards everything - all changes and imports.
+		/// </summary>
+		private void DiscardEverything()
+		{
+			int total = _pendingChanges.Count + _importedFiles.Count;
+			var result = MessageBox.Show($"Discard ALL changes and imports ({total} total)?\n\nThis cannot be undone.", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+			if (result != DialogResult.Yes)
+				return;
+
+			// Remove imported file nodes from tree
+			RemoveImportedNodesFromTree();
+
+			_pendingChanges.Clear();
+			_importedFiles.Clear();
+			_isEditingIes = false;
+			_currentIesFilePath = null;
+
+			UpdatePendingChangesUI();
+
+			// Refresh preview
+			ResetPreview();
+			if (BtnPreview.Checked)
+				Preview();
+			
+			if (_openedIpf != null)
+				LblFileName.Text = _openedIpf.FilePath;
+		}
+
+		/// <summary>
+		/// Removes imported file nodes from the tree view.
+		/// </summary>
+		private void RemoveImportedNodesFromTree()
+		{
+			var nodesToRemove = new List<TreeNode>();
+			FindImportedNodes(TreeFolders.Nodes, nodesToRemove);
+
+			foreach (var node in nodesToRemove)
+			{
+				node.Remove();
+			}
+
+			// Clean up folder entries
+			foreach (var path in _importedFiles.Keys)
+			{
+				var parts = path.Split('/');
+				var folderPath = string.Join("/", parts.Take(parts.Length - 1));
+				if (_folders.ContainsKey(folderPath))
+				{
+					_folders[folderPath].Remove(path);
+				}
+			}
+		}
+
+		/// <summary>
+		/// Recursively finds nodes marked as imported.
+		/// </summary>
+		private void FindImportedNodes(TreeNodeCollection nodes, List<TreeNode> results)
+		{
+			foreach (TreeNode node in nodes)
+			{
+				var tag = node.Tag?.ToString() ?? "";
+				if (tag.StartsWith("IMPORTED:"))
+				{
+					results.Add(node);
+				}
+				else
+				{
+					FindImportedNodes(node.Nodes, results);
+				}
+			}
+		}
+
+		/// <summary>
+		/// Removes a single imported file from the tree view.
+		/// </summary>
+		private void RemoveImportedFileFromTree(string filePath)
+		{
+			var nodesToRemove = new List<TreeNode>();
+			FindImportedNodeByPath(TreeFolders.Nodes, filePath, nodesToRemove);
+
+			foreach (var node in nodesToRemove)
+			{
+				node.Remove();
+			}
+
+			// Clean up folder entry
+			var parts = filePath.Split('/');
+			var folderPath = string.Join("/", parts.Take(parts.Length - 1));
+			if (_folders.ContainsKey(folderPath + "/"))
+			{
+				_folders[folderPath + "/"].Remove(filePath);
+			}
+		}
+
+		/// <summary>
+		/// Recursively finds a specific imported node by path.
+		/// </summary>
+		private void FindImportedNodeByPath(TreeNodeCollection nodes, string filePath, List<TreeNode> results)
+		{
+			foreach (TreeNode node in nodes)
+			{
+				var tag = node.Tag?.ToString() ?? "";
+				if (tag == "IMPORTED:" + filePath)
+				{
+					results.Add(node);
+				}
+				else
+				{
+					FindImportedNodeByPath(node.Nodes, filePath, results);
+				}
+			}
+		}
+
+		#endregion
+
+		// Event handler for Save Session menu item
+		private void SaveSession_Click(object sender, EventArgs e)
+		{
+			// TODO: Implement session save logic
+			MessageBox.Show("Save Session clicked. (Not yet implemented)", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+		}
+
+		// Event handler for Load Session menu item
+		private void LoadSession_Click(object sender, EventArgs e)
+		{
+			// TODO: Implement session load logic
+			MessageBox.Show("Load Session clicked. (Not yet implemented)", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
 		}
 	}
 }

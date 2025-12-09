@@ -43,14 +43,20 @@
     <Reference Include="Ookii.Dialogs">
       <HintPath>..\Libs\Ookii.Dialogs.dll</HintPath>
     </Reference>
+    <Reference Include="OpenTK">
+      <HintPath>..\Libs\OpenTK\lib\net20\OpenTK.dll</HintPath>
+    </Reference>
+    <Reference Include="OpenTK.GLControl">
+      <HintPath>..\Libs\OpenTK\lib\net20\OpenTK.GLControl.dll</HintPath>
+    </Reference>
     <Reference Include="ScintillaNET, Version=3.2.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\Libs\jacobslusser.ScintillaNET.3.5.6\ScintillaNET.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
-    <Reference Include="System.Windows.Forms.Ribbon35">
-      <HintPath>..\Libs\System.Windows.Forms.Ribbon35.dll</HintPath>
+    <Reference Include="RibbonWinForms">
+      <HintPath>..\Libs\RibbonWinForms\RibbonWinForms.dll</HintPath>
     </Reference>
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
@@ -60,6 +66,9 @@
     <Reference Include="System.Drawing" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
+    <Reference Include="System.Resources.Extensions">
+      <HintPath>..\packages\System.Resources.Extensions.4.7.0\lib\net472\System.Resources.Extensions.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ControlHelper.cs" />
@@ -69,6 +78,9 @@
     <Compile Include="FileFormats\IPF\IpfCollection.cs" />
     <Compile Include="FileFormats\IPF\PkwareTraditionalEncryptionData.cs" />
     <Compile Include="FileFormats\TGA\TargaImage.cs" />
+    <Compile Include="FileFormats\XAC\XacFile.cs" />
+    <Compile Include="FileFormats\XSM\XsmFile.cs" />
+    <Compile Include="Viewer3D\ModelViewerControl.cs" />
     <Compile Include="FrmAbout.cs">
       <SubType>Form</SubType>
     </Compile>

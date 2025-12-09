@@ -60,11 +60,29 @@ namespace IPFBrowser.FileFormats.IPF
 			var cipherText = new byte[length];
 			for (int i = 0; i < length; i++)
 			{
-				byte C = plainText[i];
-				cipherText[i] = (byte)(plainText[i] ^ MagicByte);
-				UpdateKeys(C);
+				if ((i % 2) != 0)
+				{
+					// Odd bytes: copy as-is
+					cipherText[i] = plainText[i];
+				}
+				else
+				{
+					// Even bytes: encrypt
+					byte C = plainText[i];
+					var k = (ushort)((ushort)(_Keys[2] & 0xFFFF) | 2);
+					cipherText[i] = (byte)(C ^ (((k * (k ^ 1)) >> 8) & 0xFF));
+					UpdateKeys(C);
+				}
 			}
 			return cipherText;
+		}
+
+		/// <summary>
+		/// Encrypt overload for full array.
+		/// </summary>
+		public byte[] Encrypt(byte[] plainText)
+		{
+			return Encrypt(plainText, plainText.Length);
 		}
 
 		private void Initialize(string password)

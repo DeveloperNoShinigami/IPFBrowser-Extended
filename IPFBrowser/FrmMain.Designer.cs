@@ -7,6 +7,33 @@
 		/// </summary>
 		private System.ComponentModel.IContainer components = null;
 
+		// Mesh controller controls
+		private System.Windows.Forms.Panel PnlMeshController;
+		private System.Windows.Forms.ListBox LstMeshes;
+		private System.Windows.Forms.Label LblMeshController;
+		private System.Windows.Forms.Button BtnSelectAllMeshes;
+		private System.Windows.Forms.Button BtnResetMeshPosition;
+		private System.Windows.Forms.Button BtnSaveMeshPosition;
+		private System.Windows.Forms.Label LblPosition;
+		private System.Windows.Forms.NumericUpDown NumPosX;
+		private System.Windows.Forms.NumericUpDown NumPosY;
+		private System.Windows.Forms.NumericUpDown NumPosZ;
+		private System.Windows.Forms.Label LblRotation;
+		private System.Windows.Forms.NumericUpDown NumRotX;
+		private System.Windows.Forms.NumericUpDown NumRotY;
+		private System.Windows.Forms.NumericUpDown NumRotZ;
+		private System.Windows.Forms.Label LblScale;
+		private System.Windows.Forms.NumericUpDown NumScaleX;
+		private System.Windows.Forms.NumericUpDown NumScaleY;
+		private System.Windows.Forms.NumericUpDown NumScaleZ;
+		private System.Windows.Forms.Label LblDirectionalControl;
+		private System.Windows.Forms.Button BtnMoveUp;
+		private System.Windows.Forms.Button BtnMoveDown;
+		private System.Windows.Forms.Button BtnMoveLeft;
+		private System.Windows.Forms.Button BtnMoveRight;
+		private System.Windows.Forms.Button BtnMoveFront;
+		private System.Windows.Forms.Button BtnMoveBack;
+
 		/// <summary>
 		/// Verwendete Ressourcen bereinigen.
 		/// </summary>
@@ -47,9 +74,44 @@
 			this.mainMenu1 = new System.Windows.Forms.MainMenu(this.components);
 			this.menuItem1 = new System.Windows.Forms.MenuItem();
 			this.BtnMenuOpen = new System.Windows.Forms.MenuItem();
+			this.MnuSeparator1 = new System.Windows.Forms.MenuItem();
+			this.MnuSave = new System.Windows.Forms.MenuItem();
+			this.MnuSaveAs = new System.Windows.Forms.MenuItem();
+			this.MnuSeparator2 = new System.Windows.Forms.MenuItem();
 			this.BtnExit = new System.Windows.Forms.MenuItem();
+			this.menuEdit = new System.Windows.Forms.MenuItem();
+			this.MnuEditIes = new System.Windows.Forms.MenuItem();
+			this.MnuImportFile = new System.Windows.Forms.MenuItem();
+			this.MnuDiscardChanges = new System.Windows.Forms.MenuItem();
 			this.menuItem3 = new System.Windows.Forms.MenuItem();
 			this.BtnAbout = new System.Windows.Forms.MenuItem();
+            // Mesh Position Controller UI
+            this.PnlMeshController = new System.Windows.Forms.Panel();
+            this.LstMeshes = new System.Windows.Forms.ListBox();
+            this.LblMeshController = new System.Windows.Forms.Label();
+            this.BtnSelectAllMeshes = new System.Windows.Forms.Button();
+            this.BtnResetMeshPosition = new System.Windows.Forms.Button();
+            this.BtnSaveMeshPosition = new System.Windows.Forms.Button();
+            this.LblPosition = new System.Windows.Forms.Label();
+            this.NumPosX = new System.Windows.Forms.NumericUpDown();
+            this.NumPosY = new System.Windows.Forms.NumericUpDown();
+            this.NumPosZ = new System.Windows.Forms.NumericUpDown();
+            this.LblRotation = new System.Windows.Forms.Label();
+            this.NumRotX = new System.Windows.Forms.NumericUpDown();
+            this.NumRotY = new System.Windows.Forms.NumericUpDown();
+            this.NumRotZ = new System.Windows.Forms.NumericUpDown();
+            this.LblScale = new System.Windows.Forms.Label();
+            this.NumScaleX = new System.Windows.Forms.NumericUpDown();
+            this.NumScaleY = new System.Windows.Forms.NumericUpDown();
+            this.NumScaleZ = new System.Windows.Forms.NumericUpDown();
+            this.LblDirectionalControl = new System.Windows.Forms.Label();
+            this.BtnMoveUp = new System.Windows.Forms.Button();
+            this.BtnMoveDown = new System.Windows.Forms.Button();
+            this.BtnMoveLeft = new System.Windows.Forms.Button();
+            this.BtnMoveRight = new System.Windows.Forms.Button();
+            this.BtnMoveFront = new System.Windows.Forms.Button();
+            this.BtnMoveBack = new System.Windows.Forms.Button();
+            // ...existing code...
 			this.SavExtractFile = new System.Windows.Forms.SaveFileDialog();
 			this.FbdExtractPack = new Ookii.Dialogs.VistaFolderBrowserDialog();
 			this.toolStrip1 = new System.Windows.Forms.ToolStrip();
@@ -60,6 +122,9 @@
 			this.BtnExtractFile = new System.Windows.Forms.ToolStripButton();
 			this.toolStripSeparator2 = new System.Windows.Forms.ToolStripSeparator();
 			this.BtnPreview = new System.Windows.Forms.ToolStripButton();
+			this.toolStripSeparator3 = new System.Windows.Forms.ToolStripSeparator();
+			this.BtnEditIes = new System.Windows.Forms.ToolStripButton();
+			this.BtnCancelEdit = new System.Windows.Forms.ToolStripButton();
 			((System.ComponentModel.ISupportInitialize)(this.SplMain)).BeginInit();
 			this.SplMain.Panel1.SuspendLayout();
 			this.SplMain.Panel2.SuspendLayout();
@@ -140,6 +205,27 @@
 			this.SplFiles.Panel2.Controls.Add(this.PnlImagePreview);
 			this.SplFiles.Panel2.Controls.Add(this.TxtPreview);
 			this.SplFiles.Panel2.Controls.Add(this.LblPreview);
+			// Add mesh controller panel docked right
+			this.PnlMeshController.Dock = System.Windows.Forms.DockStyle.Right;
+			this.PnlMeshController.Width = 220;
+			this.PnlMeshController.BackColor = System.Drawing.Color.LightGray;
+			this.PnlMeshController.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+
+			// Mesh ListBox setup
+			this.LstMeshes.Dock = System.Windows.Forms.DockStyle.Top;
+			this.LstMeshes.Height = 180;
+			this.LstMeshes.SelectionMode = System.Windows.Forms.SelectionMode.MultiExtended;
+			this.LstMeshes.FormattingEnabled = true;
+			this.LstMeshes.TabIndex = 0;
+			this.PnlMeshController.Controls.Add(this.LstMeshes);
+
+			// Label for mesh selection
+			this.LblMeshController.Text = "Meshes";
+			this.LblMeshController.Dock = System.Windows.Forms.DockStyle.Top;
+			this.LblMeshController.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+			this.LblMeshController.Height = 24;
+			this.PnlMeshController.Controls.Add(this.LblMeshController);
+			this.SplFiles.Panel2.Controls.Add(this.PnlMeshController);
 			this.SplFiles.Size = new System.Drawing.Size(710, 535);
 			this.SplFiles.SplitterDistance = 231;
 			this.SplFiles.TabIndex = 0;
@@ -149,7 +235,7 @@
 			this.LstFiles.Dock = System.Windows.Forms.DockStyle.Fill;
 			this.LstFiles.HideSelection = false;
 			this.LstFiles.Location = new System.Drawing.Point(0, 0);
-			this.LstFiles.MultiSelect = false;
+			this.LstFiles.MultiSelect = true;
 			this.LstFiles.Name = "LstFiles";
 			this.LstFiles.Size = new System.Drawing.Size(710, 231);
 			this.LstFiles.SmallImageList = this.imageList1;
@@ -210,6 +296,7 @@
 			// OfdIpfFile
 			// 
 			this.OfdIpfFile.Filter = "IPF-files|*.ipf";
+			this.OfdIpfFile.Multiselect = true;
 			// 
 			// StatusStrip
 			// 
@@ -240,6 +327,7 @@
 			// 
 			this.mainMenu1.MenuItems.AddRange(new System.Windows.Forms.MenuItem[] {
 			this.menuItem1,
+			this.menuEdit,
 			this.menuItem3});
 			// 
 			// menuItem1
@@ -247,23 +335,52 @@
 			this.menuItem1.Index = 0;
 			this.menuItem1.MenuItems.AddRange(new System.Windows.Forms.MenuItem[] {
 			this.BtnMenuOpen,
+			this.MnuSeparator1,
+			this.MnuSave,
+			this.MnuSaveAs,
+			this.MnuSeparator2,
 			this.BtnExit});
 			this.menuItem1.Text = "File";
 			// 
 			// BtnMenuOpen
 			// 
 			this.BtnMenuOpen.Index = 0;
+			this.BtnMenuOpen.Shortcut = System.Windows.Forms.Shortcut.CtrlO;
 			this.BtnMenuOpen.Text = "Open...";
 			this.BtnMenuOpen.Click += new System.EventHandler(this.BtnOpen_Click);
 			// 
+			// MnuSeparator1
+			// 
+			this.MnuSeparator1.Index = 1;
+			this.MnuSeparator1.Text = "-";
+			// 
+			// MnuSave
+			// 
+			this.MnuSave.Index = 2;
+			this.MnuSave.Shortcut = System.Windows.Forms.Shortcut.CtrlS;
+			this.MnuSave.Text = "Save";
+			this.MnuSave.Click += new System.EventHandler(this.MnuSave_Click);
+			// 
+			// MnuSaveAs
+			// 
+			this.MnuSaveAs.Index = 3;
+			this.MnuSaveAs.Shortcut = System.Windows.Forms.Shortcut.CtrlShiftS;
+			this.MnuSaveAs.Text = "Save As...";
+			this.MnuSaveAs.Click += new System.EventHandler(this.MnuSaveAs_Click);
+			// 
+			// MnuSeparator2
+			// 
+			this.MnuSeparator2.Index = 4;
+			this.MnuSeparator2.Text = "-";
+			// 
 			// BtnExit
 			// 
-			this.BtnExit.Index = 1;
+			this.BtnExit.Index = 5;
 			this.BtnExit.Text = "Exit";
 			// 
 			// menuItem3
 			// 
-			this.menuItem3.Index = 1;
+			this.menuItem3.Index = 2;
 			this.menuItem3.MenuItems.AddRange(new System.Windows.Forms.MenuItem[] {
 			this.BtnAbout});
 			this.menuItem3.Text = "?";
@@ -273,6 +390,35 @@
 			this.BtnAbout.Index = 0;
 			this.BtnAbout.Text = "About";
 			this.BtnAbout.Click += new System.EventHandler(this.BtnAbout_Click);
+			// 
+			// menuEdit
+			// 
+			this.menuEdit.Index = 1;
+			this.menuEdit.MenuItems.AddRange(new System.Windows.Forms.MenuItem[] {
+			this.MnuEditIes,
+			this.MnuImportFile,
+			this.MnuDiscardChanges});
+			this.menuEdit.Text = "Edit";
+			// 
+			// MnuEditIes
+			// 
+			this.MnuEditIes.Index = 0;
+			this.MnuEditIes.Shortcut = System.Windows.Forms.Shortcut.CtrlE;
+			this.MnuEditIes.Text = "Edit IES";
+			this.MnuEditIes.Click += new System.EventHandler(this.BtnEditIes_Click);
+			// 
+			// MnuImportFile
+			// 
+			this.MnuImportFile.Index = 1;
+			this.MnuImportFile.Shortcut = System.Windows.Forms.Shortcut.CtrlI;
+			this.MnuImportFile.Text = "Import File...";
+			this.MnuImportFile.Click += new System.EventHandler(this.MnuImportFile_Click);
+			// 
+			// MnuDiscardChanges
+			// 
+			this.MnuDiscardChanges.Index = 2;
+			this.MnuDiscardChanges.Text = "Discard All Changes";
+			this.MnuDiscardChanges.Click += new System.EventHandler(this.MnuDiscardChanges_Click);
 			// 
 			// SavExtractFile
 			// 
@@ -289,7 +435,10 @@
 			this.BtnExtractPack,
 			this.BtnExtractFile,
 			this.toolStripSeparator2,
-			this.BtnPreview});
+			this.BtnPreview,
+			this.toolStripSeparator3,
+			this.BtnEditIes,
+			this.BtnCancelEdit});
 			this.toolStrip1.Location = new System.Drawing.Point(0, 0);
 			this.toolStrip1.Name = "toolStrip1";
 			this.toolStrip1.RenderMode = System.Windows.Forms.ToolStripRenderMode.System;
@@ -365,6 +514,33 @@
 			this.BtnPreview.Text = "Show Preview";
 			this.BtnPreview.Click += new System.EventHandler(this.BtnPreview_Click);
 			// 
+			// toolStripSeparator3
+			// 
+			this.toolStripSeparator3.Name = "toolStripSeparator3";
+			this.toolStripSeparator3.Size = new System.Drawing.Size(6, 41);
+			// 
+			// BtnEditIes
+			// 
+			this.BtnEditIes.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+			this.BtnEditIes.Enabled = false;
+			this.BtnEditIes.ImageTransparentColor = System.Drawing.Color.Magenta;
+			this.BtnEditIes.Name = "BtnEditIes";
+			this.BtnEditIes.Size = new System.Drawing.Size(51, 38);
+			this.BtnEditIes.Text = "Edit IES";
+			this.BtnEditIes.ToolTipText = "Edit selected IES file as XML";
+			this.BtnEditIes.Click += new System.EventHandler(this.BtnEditIes_Click);
+			// 
+			// BtnCancelEdit
+			// 
+			this.BtnCancelEdit.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+			this.BtnCancelEdit.Enabled = false;
+			this.BtnCancelEdit.ImageTransparentColor = System.Drawing.Color.Magenta;
+			this.BtnCancelEdit.Name = "BtnCancelEdit";
+			this.BtnCancelEdit.Size = new System.Drawing.Size(47, 38);
+			this.BtnCancelEdit.Text = "Cancel";
+			this.BtnCancelEdit.ToolTipText = "Cancel IES editing";
+			this.BtnCancelEdit.Click += new System.EventHandler(this.BtnCancelEdit_Click);
+			// 
 			// FrmMain
 			// 
 			this.AllowDrop = true;
@@ -424,6 +600,14 @@
 		private System.Windows.Forms.Panel PnlImagePreview;
 		private System.Windows.Forms.PictureBox ImgPreview;
 		private System.Windows.Forms.MenuItem BtnMenuOpen;
+		private System.Windows.Forms.MenuItem MnuSeparator1;
+		private System.Windows.Forms.MenuItem MnuSave;
+		private System.Windows.Forms.MenuItem MnuSaveAs;
+		private System.Windows.Forms.MenuItem MnuSeparator2;
+		private System.Windows.Forms.MenuItem menuEdit;
+		private System.Windows.Forms.MenuItem MnuEditIes;
+		private System.Windows.Forms.MenuItem MnuImportFile;
+		private System.Windows.Forms.MenuItem MnuDiscardChanges;
 		private System.Windows.Forms.DataGridView GridPreview;
 		private System.Windows.Forms.ToolStripSeparator toolStripSeparator1;
 		private System.Windows.Forms.ToolStripButton BtnExtractPack;
@@ -433,6 +617,9 @@
 		private System.Windows.Forms.ToolStripSeparator toolStripSeparator2;
 		private System.Windows.Forms.ToolStripButton BtnExtractClient;
 		private System.Windows.Forms.ToolStripButton BtnPreview;
+		private System.Windows.Forms.ToolStripSeparator toolStripSeparator3;
+		private System.Windows.Forms.ToolStripButton BtnEditIes;
+		private System.Windows.Forms.ToolStripButton BtnCancelEdit;
 	}
 }
 

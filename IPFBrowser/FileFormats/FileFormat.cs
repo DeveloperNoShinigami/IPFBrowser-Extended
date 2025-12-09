@@ -38,5 +38,8 @@ namespace IPFBrowser.FileFormats
 		TgaImage,
 		IesTable,
 		TtfFont,
+		Model3D,       // XAC 3D models
+		Animation3D,   // XSM animations
+		HexView,       // Generic binary hex view
 	}
 }

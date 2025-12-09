@@ -11,6 +11,8 @@ namespace IPFBrowser.FileFormats.DDS
 		#region Variables
 		private bool m_isValid = false;
 		private System.Drawing.Bitmap m_bitmap = null;
+		private DDS_HEADER_DXT10 m_dx10Header;
+		private bool m_hasDX10Header = false;
 		#endregion
 
 		#region Constructor/Destructor
@@ -68,14 +70,25 @@ namespace IPFBrowser.FileFormats.DDS
 				pixelFormat = this.GetFormat(header, ref blocksize);
 				if (pixelFormat == PixelFormat.UNKNOWN)
 				{
-					throw new InvalidFileHeaderException();
+					// Convert FOURCC to readable string
+					uint fourcc = header.pixelformat.fourcc;
+					string fourccStr = new string(new char[] {
+						(char)(fourcc & 0xFF),
+						(char)((fourcc >> 8) & 0xFF),
+						(char)((fourcc >> 16) & 0xFF),
+						(char)((fourcc >> 24) & 0xFF)
+					});
+					throw new UnsupportedFormatException($"Unsupported DDS format: FOURCC='{fourccStr}' (0x{fourcc:X8})");
 				}
 
 				data = this.ReadData(reader, header);
 				if (data != null)
 				{
 					byte[] rawData = this.DecompressData(header, data, pixelFormat);
-					this.m_bitmap = this.CreateBitmap((int)header.width, (int)header.height, rawData);
+					if (rawData != null)
+					{
+						this.m_bitmap = this.CreateBitmap((int)header.width, (int)header.height, rawData);
+					}
 				}
 			}
 		}
@@ -85,32 +98,61 @@ namespace IPFBrowser.FileFormats.DDS
 			byte[] compdata = null;
 			uint compsize = 0;
 
-			if ((header.flags & DDSD_LINEARSIZE) > 1)
+			if ((header.flags & DDSD_LINEARSIZE) != 0 && header.sizeorpitch > 0)
 			{
 				compdata = reader.ReadBytes((int)header.sizeorpitch);
 				compsize = (uint)compdata.Length;
 			}
 			else
 			{
-				uint bps = header.width * header.pixelformat.rgbbitcount / 8;
-				compsize = bps * header.height * header.depth;
-				compdata = new byte[compsize];
-
-				MemoryStream mem = new MemoryStream((int)compsize);
-
-				byte[] temp;
-				for (int z = 0; z < header.depth; z++)
+				// For compressed formats (DXT1-5, BC1-7), calculate size based on block compression
+				uint fourcc = header.pixelformat.fourcc;
+				uint blockSize = 16; // Default for DXT2-5, BC2-3, BC5, BC7
+				
+				// DXT1/BC1/BC4 use 8 bytes per block, others use 16
+				if (fourcc == FOURCC_DXT1 || fourcc == FOURCC_ATI1 || fourcc == FOURCC_BC4U || fourcc == FOURCC_BC4S)
 				{
-					for (int y = 0; y < header.height; y++)
-					{
-						temp = reader.ReadBytes((int)bps);
-						mem.Write(temp, 0, temp.Length);
-					}
+					blockSize = 8;
 				}
-				mem.Seek(0, SeekOrigin.Begin);
+				
+				// Check if it's a compressed format
+				bool isCompressed = (fourcc == FOURCC_DXT1 || fourcc == FOURCC_DXT2 || fourcc == FOURCC_DXT3 ||
+				                     fourcc == FOURCC_DXT4 || fourcc == FOURCC_DXT5 || fourcc == FOURCC_DX10 ||
+				                     fourcc == FOURCC_ATI1 || fourcc == FOURCC_ATI2 || fourcc == FOURCC_BC4U ||
+				                     fourcc == FOURCC_BC4S || fourcc == FOURCC_BC5U || fourcc == FOURCC_BC5S);
+				
+				if (isCompressed)
+				{
+					// Block-compressed: ((width+3)/4) * ((height+3)/4) * blockSize
+					uint blocksWide = (header.width + 3) / 4;
+					uint blocksHigh = (header.height + 3) / 4;
+					compsize = blocksWide * blocksHigh * blockSize * header.depth;
+					compdata = reader.ReadBytes((int)compsize);
+				}
+				else
+				{
+					// Uncompressed: read row by row
+					uint bps = header.width * header.pixelformat.rgbbitcount / 8;
+					if (bps == 0) bps = header.width * 4; // Default to 32bpp if unknown
+					compsize = bps * header.height * header.depth;
+					compdata = new byte[compsize];
 
-				mem.Read(compdata, 0, compdata.Length);
-				mem.Close();
+					MemoryStream mem = new MemoryStream((int)compsize);
+
+					byte[] temp;
+					for (int z = 0; z < header.depth; z++)
+					{
+						for (int y = 0; y < header.height; y++)
+						{
+							temp = reader.ReadBytes((int)bps);
+							mem.Write(temp, 0, temp.Length);
+						}
+					}
+					mem.Seek(0, SeekOrigin.Begin);
+
+					mem.Read(compdata, 0, compdata.Length);
+					mem.Close();
+				}
 			}
 
 			return compdata;
@@ -185,6 +227,17 @@ namespace IPFBrowser.FileFormats.DDS
 			header.ddscaps.caps3 = reader.ReadUInt32();
 			header.ddscaps.caps4 = reader.ReadUInt32();
 			header.texturestage = reader.ReadUInt32();
+
+			// Read DX10 extended header if present
+			if (header.pixelformat.fourcc == FOURCC_DX10)
+			{
+				m_dx10Header.dxgiFormat = reader.ReadUInt32();
+				m_dx10Header.resourceDimension = reader.ReadUInt32();
+				m_dx10Header.miscFlag = reader.ReadUInt32();
+				m_dx10Header.arraySize = reader.ReadUInt32();
+				m_dx10Header.miscFlags2 = reader.ReadUInt32();
+				m_hasDX10Header = true;
+			}
 
 			return true;
 		}
@@ -273,6 +326,11 @@ namespace IPFBrowser.FileFormats.DDS
 						blocksize = header.width * header.height * header.depth * 16;
 						break;
 
+					case FOURCC_DX10:
+						// Handle DX10 extended header formats
+						format = GetDX10Format(ref blocksize, header.width, header.height, header.depth);
+						break;
+
 					default:
 						format = PixelFormat.UNKNOWN;
 						blocksize *= 16;
@@ -306,6 +364,84 @@ namespace IPFBrowser.FileFormats.DDS
 				}
 
 				blocksize = (header.width * header.height * header.depth * (header.pixelformat.rgbbitcount >> 3));
+			}
+
+			return format;
+		}
+
+		private PixelFormat GetDX10Format(ref uint blocksize, uint width, uint height, uint depth)
+		{
+			PixelFormat format = PixelFormat.UNKNOWN;
+			uint numBlocks = ((width + 3) / 4) * ((height + 3) / 4) * depth;
+
+			switch (m_dx10Header.dxgiFormat)
+			{
+				case DXGI_FORMAT_BC1_TYPELESS:
+				case DXGI_FORMAT_BC1_UNORM:
+				case DXGI_FORMAT_BC1_UNORM_SRGB:
+					format = PixelFormat.DXT1;
+					blocksize = numBlocks * 8;
+					break;
+
+				case DXGI_FORMAT_BC2_TYPELESS:
+				case DXGI_FORMAT_BC2_UNORM:
+				case DXGI_FORMAT_BC2_UNORM_SRGB:
+					format = PixelFormat.DXT3;
+					blocksize = numBlocks * 16;
+					break;
+
+				case DXGI_FORMAT_BC3_TYPELESS:
+				case DXGI_FORMAT_BC3_UNORM:
+				case DXGI_FORMAT_BC3_UNORM_SRGB:
+					format = PixelFormat.DXT5;
+					blocksize = numBlocks * 16;
+					break;
+
+				case DXGI_FORMAT_BC7_TYPELESS:
+				case DXGI_FORMAT_BC7_UNORM:
+				case DXGI_FORMAT_BC7_UNORM_SRGB:
+					format = PixelFormat.BC7;
+					blocksize = numBlocks * 16; // 16 bytes per 4x4 block
+					break;
+
+				case DXGI_FORMAT_BC6H_TYPELESS:
+				case DXGI_FORMAT_BC6H_UF16:
+				case DXGI_FORMAT_BC6H_SF16:
+					format = PixelFormat.BC6H;
+					blocksize = numBlocks * 16;
+					break;
+
+				case DXGI_FORMAT_BC4_TYPELESS:
+				case DXGI_FORMAT_BC4_UNORM:
+				case DXGI_FORMAT_BC4_SNORM:
+					format = PixelFormat.BC4;
+					blocksize = numBlocks * 8;
+					break;
+
+				case DXGI_FORMAT_BC5_TYPELESS:
+				case DXGI_FORMAT_BC5_UNORM:
+				case DXGI_FORMAT_BC5_SNORM:
+					format = PixelFormat.BC5;
+					blocksize = numBlocks * 16;
+					break;
+
+				case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+				case DXGI_FORMAT_R8G8B8A8_UNORM:
+				case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+					format = PixelFormat.RGBA;
+					blocksize = width * height * depth * 4;
+					break;
+
+				case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+				case DXGI_FORMAT_B8G8R8A8_UNORM:
+				case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+					format = PixelFormat.RGBA; // Will swap channels when reading
+					blocksize = width * height * depth * 4;
+					break;
+
+				default:
+					// Throw descriptive exception for unsupported formats
+					throw new UnsupportedFormatException($"Unsupported DXGI format: {m_dx10Header.dxgiFormat}");
 			}
 
 			return format;
@@ -675,6 +811,22 @@ namespace IPFBrowser.FileFormats.DDS
 				case PixelFormat.A32B32G32R32F:
 					rawData = this.DecompressFloat(header, data, pixelFormat);
 					break;
+
+				case PixelFormat.BC7:
+					rawData = this.DecompressBC7(header, data);
+					break;
+
+				case PixelFormat.BC4:
+					rawData = this.DecompressBC4(header, data);
+					break;
+
+				case PixelFormat.BC5:
+					rawData = this.DecompressBC5(header, data);
+					break;
+
+				case PixelFormat.BC6H:
+					// BC6H is HDR format - not commonly used for textures
+					throw new UnsupportedFormatException("BC6H (HDR) format is not supported");
 
 				default:
 					throw new UnknownFileFormatException();
@@ -1543,6 +1695,495 @@ namespace IPFBrowser.FileFormats.DDS
 			return rawData;
 		}
 
+		#region BC7 Decompression
+		// BC7 mode information tables
+		private static readonly int[] BC7_NUM_SUBSETS = { 3, 2, 3, 2, 1, 1, 1, 2 };
+		private static readonly int[] BC7_PARTITION_BITS = { 4, 6, 6, 6, 0, 0, 0, 6 };
+		private static readonly int[] BC7_ROTATION_BITS = { 0, 0, 0, 0, 2, 2, 0, 0 };
+		private static readonly int[] BC7_INDEX_SELECTION_BITS = { 0, 0, 0, 0, 1, 0, 0, 0 };
+		private static readonly int[] BC7_COLOR_BITS = { 4, 6, 5, 7, 5, 7, 7, 5 };
+		private static readonly int[] BC7_ALPHA_BITS = { 0, 0, 0, 0, 6, 8, 7, 5 };
+		private static readonly int[] BC7_ENDPOINT_P_BITS = { 1, 1, 0, 1, 0, 0, 1, 1 };
+		private static readonly int[] BC7_SHARED_P_BITS = { 0, 0, 0, 0, 0, 0, 0, 0 };
+		private static readonly int[] BC7_INDEX_BITS_0 = { 3, 3, 2, 2, 2, 2, 4, 2 };
+		private static readonly int[] BC7_INDEX_BITS_1 = { 0, 0, 0, 0, 3, 2, 0, 2 };
+
+		// Partition tables for 2 and 3 subsets - 64 partitions, 16 pixels each
+		private static readonly byte[,] BC7_PARTITION2 = new byte[64, 16] {
+			{0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1}, {0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1},
+			{0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1}, {0,0,0,1,0,0,1,1,0,0,1,1,0,1,1,1},
+			{0,0,0,0,0,0,0,1,0,0,0,1,0,0,1,1}, {0,0,1,1,0,1,1,1,0,1,1,1,1,1,1,1},
+			{0,0,0,1,0,0,1,1,0,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,1,0,0,1,1,0,1,1,1},
+			{0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,1}, {0,0,1,1,0,1,1,1,1,1,1,1,1,1,1,1},
+			{0,0,0,0,0,0,0,1,0,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,0,0,0,1,0,1,1,1},
+			{0,0,0,1,0,1,1,1,1,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1},
+			{0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1}, {0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1},
+			{0,0,0,0,1,0,0,0,1,1,1,0,1,1,1,1}, {0,1,1,1,0,0,0,1,0,0,0,0,0,0,0,0},
+			{0,0,0,0,0,0,0,0,1,0,0,0,1,1,1,0}, {0,1,1,1,0,0,1,1,0,0,0,1,0,0,0,0},
+			{0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0}, {0,0,0,0,1,0,0,0,1,1,0,0,1,1,1,0},
+			{0,0,0,0,0,0,0,0,1,0,0,0,1,1,0,0}, {0,1,1,1,0,0,1,1,0,0,1,1,0,0,0,1},
+			{0,0,1,1,0,0,0,1,0,0,0,1,0,0,0,0}, {0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0},
+			{0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0}, {0,0,1,1,0,1,1,0,0,1,1,0,1,1,0,0},
+			{0,0,0,1,0,1,1,1,1,1,1,0,1,0,0,0}, {0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0},
+			{0,1,1,1,0,0,0,1,1,0,0,0,1,1,1,0}, {0,0,1,1,1,0,0,1,1,0,0,1,1,1,0,0},
+			{0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1}, {0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1},
+			{0,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0}, {0,0,1,1,0,0,1,1,1,1,0,0,1,1,0,0},
+			{0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0}, {0,1,0,1,0,1,0,1,1,0,1,0,1,0,1,0},
+			{0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1}, {0,1,0,1,1,0,1,0,1,0,1,0,0,1,0,1},
+			{0,1,1,1,0,0,1,1,1,1,0,0,1,1,1,0}, {0,0,0,1,0,0,1,1,1,1,0,0,1,0,0,0},
+			{0,0,1,1,0,0,1,0,0,1,0,0,1,1,0,0}, {0,0,1,1,1,0,1,1,1,1,0,1,1,1,0,0},
+			{0,1,1,0,1,0,0,1,1,0,0,1,0,1,1,0}, {0,0,1,1,1,1,0,0,1,1,0,0,0,0,1,1},
+			{0,1,1,0,0,1,1,0,1,0,0,1,1,0,0,1}, {0,0,0,0,0,1,1,0,0,1,1,0,0,0,0,0},
+			{0,1,0,0,1,1,1,0,0,1,0,0,0,0,0,0}, {0,0,1,0,0,1,1,1,0,0,1,0,0,0,0,0},
+			{0,0,0,0,0,0,1,0,0,1,1,1,0,0,1,0}, {0,0,0,0,0,1,0,0,1,1,1,0,0,1,0,0},
+			{0,1,1,0,1,1,0,0,1,0,0,1,0,0,1,1}, {0,0,1,1,0,1,1,0,1,1,0,0,1,0,0,1},
+                        {0,1,1,0,0,0,1,1,1,0,0,1,1,1,0,0}, {0,0,1,1,1,0,0,1,1,1,0,0,0,1,1,0},
+                        {0,1,1,0,1,1,0,0,1,1,0,0,1,0,0,1}, {0,1,1,0,0,0,1,1,0,0,1,1,1,0,0,1},
+                        {0,1,1,1,1,1,1,0,1,0,0,0,0,0,0,1}, {0,0,0,1,1,0,0,0,1,1,1,0,0,1,1,1},
+                        {0,0,0,0,1,1,0,0,1,1,1,0,1,1,1,1}, {0,1,1,1,0,0,0,0,0,0,1,1,0,1,1,1},
+                        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+                };
+
+		private static readonly byte[,] BC7_PARTITION3 = new byte[64, 16] {
+			{0,0,1,1,0,0,1,1,0,2,2,1,2,2,2,2}, {0,0,0,1,0,0,1,1,2,2,1,1,2,2,2,1},
+			{0,0,0,0,2,0,0,1,2,2,1,1,2,2,1,1}, {0,2,2,2,0,0,2,2,0,0,1,1,0,1,1,1},
+			{0,0,0,0,0,0,0,0,1,1,2,2,1,1,2,2}, {0,0,1,1,0,0,1,1,0,0,2,2,0,0,2,2},
+			{0,0,2,2,0,0,2,2,1,1,1,1,1,1,1,1}, {0,0,1,1,0,0,1,1,2,2,1,1,2,2,1,1},
+			{0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2}, {0,0,0,0,1,1,1,1,1,1,1,1,2,2,2,2},
+			{0,0,0,0,1,1,1,1,2,2,2,2,2,2,2,2}, {0,0,1,2,0,0,1,2,0,0,1,2,0,0,1,2},
+			{0,1,1,2,0,1,1,2,0,1,1,2,0,1,1,2}, {0,1,2,2,0,1,2,2,0,1,2,2,0,1,2,2},
+			{0,0,1,1,0,1,1,2,1,1,2,2,1,2,2,2}, {0,0,1,1,2,0,0,1,2,2,0,0,2,2,2,0},
+			{0,0,0,1,0,0,1,1,0,1,1,2,1,1,2,2}, {0,1,1,1,0,0,1,1,2,0,0,1,2,2,0,0},
+			{0,0,0,0,1,1,2,2,1,1,2,2,1,1,2,2}, {0,0,2,2,0,0,2,2,0,0,2,2,1,1,1,1},
+			{0,1,1,1,0,1,1,1,0,2,2,2,0,2,2,2}, {0,0,0,1,0,0,0,1,2,2,2,1,2,2,2,1},
+			{0,0,0,0,0,0,1,1,0,1,2,2,0,1,2,2}, {0,0,0,0,1,1,0,0,2,2,1,0,2,2,1,0},
+			{0,1,2,2,0,1,2,2,0,0,1,1,0,0,0,0}, {0,0,1,2,0,0,1,2,1,1,2,2,2,2,2,2},
+			{0,1,1,0,1,2,2,1,1,2,2,1,0,1,1,0}, {0,0,0,0,0,1,1,0,1,2,2,1,1,2,2,1},
+			{0,0,2,2,1,1,0,2,1,1,0,2,0,0,2,2}, {0,1,1,0,0,1,1,0,2,0,0,2,2,2,2,2},
+			{0,0,1,1,0,1,2,2,0,1,2,2,0,0,1,1}, {0,0,0,0,2,0,0,0,2,2,1,1,2,2,2,1},
+			{0,0,0,0,0,0,0,2,1,1,2,2,1,2,2,2}, {0,2,2,2,0,0,2,2,0,0,1,2,0,0,1,1},
+			{0,0,1,1,0,0,1,2,0,0,2,2,0,2,2,2}, {0,1,2,0,0,1,2,0,0,1,2,0,0,1,2,0},
+			{0,0,0,0,1,1,1,1,2,2,2,2,0,0,0,0}, {0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0},
+			{0,1,2,0,2,0,1,2,1,2,0,1,0,1,2,0}, {0,0,1,1,2,2,0,0,1,1,2,2,0,0,1,1},
+			{0,0,1,1,1,1,2,2,2,2,0,0,0,0,1,1}, {0,1,0,1,0,1,0,1,2,2,2,2,2,2,2,2},
+			{0,0,0,0,0,0,0,0,2,1,2,1,2,1,2,1}, {0,0,2,2,1,1,2,2,0,0,2,2,1,1,2,2},
+			{0,0,2,2,0,0,1,1,0,0,2,2,0,0,1,1}, {0,2,2,0,1,2,2,1,0,2,2,0,1,2,2,1},
+			{0,1,0,1,2,2,2,2,2,2,2,2,0,1,0,1}, {0,0,0,0,2,1,2,1,2,1,2,1,2,1,2,1},
+			{0,1,0,1,0,1,0,1,0,1,0,1,2,2,2,2}, {0,2,2,2,0,1,1,1,0,2,2,2,0,1,1,1},
+			{0,0,0,2,1,1,1,2,0,0,0,2,1,1,1,2}, {0,0,0,0,2,1,1,2,2,1,1,2,2,1,1,2},
+			{0,2,2,2,0,1,1,1,0,1,1,1,0,2,2,2}, {0,0,0,2,0,0,0,1,0,0,0,2,0,0,0,1},
+			{0,0,2,2,1,1,2,2,1,1,2,2,0,0,2,2}, {0,0,2,2,0,0,1,1,0,0,1,1,0,0,2,2},
+			{0,0,0,0,0,0,0,0,0,0,0,0,2,1,1,2}, {0,0,0,2,0,0,0,1,0,0,0,1,0,0,0,2},
+                        {0,2,2,2,1,2,2,2,0,2,2,2,1,2,2,2}, {0,1,0,1,2,2,2,2,2,2,2,2,2,2,2,2},
+                        {0,1,1,1,2,0,1,1,2,2,0,1,2,2,2,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+                        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+                };
+
+		// Anchor index tables for BC7 - 64 entries each
+		private static readonly byte[] BC7_ANCHOR_INDEX_SECOND_SUBSET_2 = new byte[64] {
+			15,15,15,15,15,15,15,15, 15,15,15,15,15,15,15,15, 15, 2, 8, 2, 2, 8, 8,15,  2, 8, 2, 2, 8, 8, 2, 2,
+			15,15, 6, 8, 2, 8,15,15,  2, 8, 2, 2, 2,15,15, 6,  6, 2, 6, 8,15,15, 2, 2, 15,15,15,15, 3, 8,15,15
+		};
+
+		private static readonly byte[] BC7_ANCHOR_INDEX_SECOND_SUBSET_3 = new byte[64] {
+			 3, 3,15,15, 8, 3,15,15,  8, 8, 6, 6, 6, 5, 3, 3,  3, 3, 8,15, 3, 3, 6,10,  5, 8, 8, 6, 8, 5,15,15,
+			 8,15, 3, 5, 6,10, 8,15, 15, 3,15, 5,15,15,15,15,  3,15, 5, 5, 5, 8, 5,10,  5,10, 8,13,15,12, 3, 3
+		};
+
+		private static readonly byte[] BC7_ANCHOR_INDEX_THIRD_SUBSET_3 = new byte[64] {
+			15, 8, 8, 3,15,15, 3, 8, 15,15,15,15,15,15,15, 8, 15, 8,15, 3,15, 8,15, 8,  3,15, 6,10,15,15,10, 8,
+			15, 3,15,10,10, 8, 9,10,  6,15, 8,15, 3, 6, 6, 8, 15, 3,15,15,15,15,15,15, 15,15,15,15, 3,15,15, 8
+		};
+
+		private byte[] DecompressBC7(DDSStruct header, byte[] data)
+		{
+			int width = (int)header.width;
+			int height = (int)header.height;
+			int depth = (int)header.depth;
+			if (depth == 0) depth = 1;
+
+			byte[] rawData = new byte[width * height * depth * 4];
+			int dataOffset = 0;
+
+			for (int z = 0; z < depth; z++)
+			{
+				for (int y = 0; y < height; y += 4)
+				{
+					for (int x = 0; x < width; x += 4)
+					{
+						if (dataOffset + 16 > data.Length)
+							break;
+
+						// Read 16-byte block
+						byte[] block = new byte[16];
+						Array.Copy(data, dataOffset, block, 0, 16);
+						dataOffset += 16;
+
+						// Decode the 4x4 block
+						byte[,] pixels = DecodeBC7Block(block);
+
+						// Write to output
+						for (int by = 0; by < 4 && (y + by) < height; by++)
+						{
+							for (int bx = 0; bx < 4 && (x + bx) < width; bx++)
+							{
+								int outOffset = ((z * height + (y + by)) * width + (x + bx)) * 4;
+								rawData[outOffset + 0] = pixels[by * 4 + bx, 0]; // R
+								rawData[outOffset + 1] = pixels[by * 4 + bx, 1]; // G
+								rawData[outOffset + 2] = pixels[by * 4 + bx, 2]; // B
+								rawData[outOffset + 3] = pixels[by * 4 + bx, 3]; // A
+							}
+						}
+					}
+				}
+			}
+
+			return rawData;
+		}
+
+		private byte[,] DecodeBC7Block(byte[] block)
+		{
+			byte[,] pixels = new byte[16, 4]; // 16 pixels, RGBA each
+
+			// Find mode (first set bit)
+			int mode = 0;
+			byte modeByte = block[0];
+			for (mode = 0; mode < 8; mode++)
+			{
+				if ((modeByte & (1 << mode)) != 0)
+					break;
+			}
+
+			if (mode == 8)
+			{
+				// Invalid mode, return transparent black
+				for (int i = 0; i < 16; i++)
+				{
+					pixels[i, 0] = pixels[i, 1] = pixels[i, 2] = 0;
+					pixels[i, 3] = 255;
+				}
+				return pixels;
+			}
+
+			// Bit reader
+			BC7BitReader reader = new BC7BitReader(block);
+			reader.ReadBits(mode + 1); // Skip mode bits
+
+			int numSubsets = BC7_NUM_SUBSETS[mode];
+			int partitionBits = BC7_PARTITION_BITS[mode];
+			int rotationBits = BC7_ROTATION_BITS[mode];
+			int indexSelectionBits = BC7_INDEX_SELECTION_BITS[mode];
+			int colorBits = BC7_COLOR_BITS[mode];
+			int alphaBits = BC7_ALPHA_BITS[mode];
+			int endpointPBits = BC7_ENDPOINT_P_BITS[mode];
+			int indexBits0 = BC7_INDEX_BITS_0[mode];
+			int indexBits1 = BC7_INDEX_BITS_1[mode];
+
+			int partition = partitionBits > 0 ? (int)reader.ReadBits(partitionBits) : 0;
+			int rotation = rotationBits > 0 ? (int)reader.ReadBits(rotationBits) : 0;
+			int indexSelection = indexSelectionBits > 0 ? (int)reader.ReadBits(indexSelectionBits) : 0;
+
+			// Read color endpoints
+			int[,] endpoints = new int[numSubsets * 2, 4]; // [endpoint index, RGBA]
+
+			// Read R, G, B for all endpoints
+			for (int i = 0; i < numSubsets * 2; i++)
+				endpoints[i, 0] = (int)reader.ReadBits(colorBits);
+			for (int i = 0; i < numSubsets * 2; i++)
+				endpoints[i, 1] = (int)reader.ReadBits(colorBits);
+			for (int i = 0; i < numSubsets * 2; i++)
+				endpoints[i, 2] = (int)reader.ReadBits(colorBits);
+
+			// Read alpha for all endpoints
+			if (alphaBits > 0)
+			{
+				for (int i = 0; i < numSubsets * 2; i++)
+					endpoints[i, 3] = (int)reader.ReadBits(alphaBits);
+			}
+			else
+			{
+				for (int i = 0; i < numSubsets * 2; i++)
+					endpoints[i, 3] = 255;
+			}
+
+			// Read P-bits
+			if (endpointPBits > 0)
+			{
+				for (int i = 0; i < numSubsets * 2; i++)
+				{
+					int pbit = (int)reader.ReadBits(1);
+					for (int c = 0; c < 3; c++)
+						endpoints[i, c] = (endpoints[i, c] << 1) | pbit;
+					if (alphaBits > 0)
+						endpoints[i, 3] = (endpoints[i, 3] << 1) | pbit;
+				}
+				colorBits++;
+				if (alphaBits > 0) alphaBits++;
+			}
+
+			// Expand endpoints to 8-bit
+			for (int i = 0; i < numSubsets * 2; i++)
+			{
+				for (int c = 0; c < 3; c++)
+					endpoints[i, c] = ExpandBits(endpoints[i, c], colorBits);
+				if (alphaBits > 0)
+					endpoints[i, 3] = ExpandBits(endpoints[i, 3], alphaBits);
+				else
+					endpoints[i, 3] = 255;
+			}
+
+			// Read indices
+			int[] indices0 = new int[16];
+			int[] indices1 = new int[16];
+
+			// Determine anchor indices
+			int anchorIndex0 = 0;
+			int anchorIndex1 = numSubsets > 1 ? (numSubsets == 2 ? BC7_ANCHOR_INDEX_SECOND_SUBSET_2[partition] : BC7_ANCHOR_INDEX_SECOND_SUBSET_3[partition]) : 0;
+			int anchorIndex2 = numSubsets > 2 ? BC7_ANCHOR_INDEX_THIRD_SUBSET_3[partition] : 0;
+
+			// Read primary indices
+			for (int i = 0; i < 16; i++)
+			{
+				int subset = GetSubset(numSubsets, partition, i);
+				bool isAnchor = (i == 0) || 
+					(numSubsets >= 2 && subset == 1 && i == anchorIndex1) ||
+					(numSubsets >= 3 && subset == 2 && i == anchorIndex2);
+				int bits = isAnchor ? indexBits0 - 1 : indexBits0;
+				indices0[i] = (int)reader.ReadBits(bits);
+			}
+
+			// Read secondary indices if present
+			if (indexBits1 > 0)
+			{
+				for (int i = 0; i < 16; i++)
+				{
+					bool isAnchor = (i == 0);
+					int bits = isAnchor ? indexBits1 - 1 : indexBits1;
+					indices1[i] = (int)reader.ReadBits(bits);
+				}
+			}
+
+			// Interpolate colors
+			int maxIndex0 = (1 << indexBits0) - 1;
+			int maxIndex1 = indexBits1 > 0 ? (1 << indexBits1) - 1 : 0;
+
+			for (int i = 0; i < 16; i++)
+			{
+				int subset = GetSubset(numSubsets, partition, i);
+				int e0 = subset * 2;
+				int e1 = subset * 2 + 1;
+
+				int colorIndex = indexSelection == 0 ? indices0[i] : indices1[i];
+				int alphaIndex = (indexSelection == 0 && indexBits1 > 0) ? indices1[i] : indices0[i];
+				int colorMax = indexSelection == 0 ? maxIndex0 : maxIndex1;
+				int alphaMax = (indexSelection == 0 && indexBits1 > 0) ? maxIndex1 : maxIndex0;
+
+				// Interpolate color
+				for (int c = 0; c < 3; c++)
+				{
+					pixels[i, c] = (byte)Interpolate(endpoints[e0, c], endpoints[e1, c], colorIndex, colorMax);
+				}
+				pixels[i, 3] = (byte)Interpolate(endpoints[e0, 3], endpoints[e1, 3], alphaIndex, alphaMax);
+
+				// Apply rotation
+				if (rotation != 0)
+				{
+					byte temp = pixels[i, 3];
+					pixels[i, 3] = pixels[i, rotation - 1];
+					pixels[i, rotation - 1] = temp;
+				}
+			}
+
+			return pixels;
+		}
+
+		private int GetSubset(int numSubsets, int partition, int pixelIndex)
+		{
+			if (numSubsets == 1) return 0;
+			if (numSubsets == 2) return BC7_PARTITION2[partition, pixelIndex];
+			return BC7_PARTITION3[partition, pixelIndex];
+		}
+
+		private int ExpandBits(int value, int bits)
+		{
+			if (bits >= 8) return value;
+			value <<= (8 - bits);
+			value |= value >> bits;
+			return value & 0xFF;
+		}
+
+		private int Interpolate(int e0, int e1, int index, int maxIndex)
+		{
+			if (maxIndex == 0) return e0;
+			int[] weights;
+			switch (maxIndex)
+			{
+				case 3: weights = new int[] { 0, 21, 43, 64 }; break;
+				case 7: weights = new int[] { 0, 9, 18, 27, 37, 46, 55, 64 }; break;
+				case 15: weights = new int[] { 0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64 }; break;
+				default: return e0;
+			}
+			return (e0 * (64 - weights[index]) + e1 * weights[index] + 32) >> 6;
+		}
+
+		private class BC7BitReader
+		{
+			private byte[] data;
+			private int bitPos;
+
+			public BC7BitReader(byte[] data)
+			{
+				this.data = data;
+				this.bitPos = 0;
+			}
+
+			public uint ReadBits(int numBits)
+			{
+				if (numBits == 0) return 0;
+				uint result = 0;
+				for (int i = 0; i < numBits; i++)
+				{
+					int byteIndex = bitPos / 8;
+					int bitIndex = bitPos % 8;
+					if (byteIndex < data.Length)
+					{
+						if ((data[byteIndex] & (1 << bitIndex)) != 0)
+							result |= (uint)(1 << i);
+					}
+					bitPos++;
+				}
+				return result;
+			}
+		}
+		#endregion
+
+		#region BC4/BC5 Decompression
+		private byte[] DecompressBC4(DDSStruct header, byte[] data)
+		{
+			int width = (int)header.width;
+			int height = (int)header.height;
+			int depth = (int)header.depth;
+			if (depth == 0) depth = 1;
+
+			byte[] rawData = new byte[width * height * depth * 4];
+			int dataOffset = 0;
+
+			for (int z = 0; z < depth; z++)
+			{
+				for (int y = 0; y < height; y += 4)
+				{
+					for (int x = 0; x < width; x += 4)
+					{
+						if (dataOffset + 8 > data.Length) break;
+
+						byte[] blockR = DecodeBC4Block(data, dataOffset);
+						dataOffset += 8;
+
+						for (int by = 0; by < 4 && (y + by) < height; by++)
+						{
+							for (int bx = 0; bx < 4 && (x + bx) < width; bx++)
+							{
+								int outOffset = ((z * height + (y + by)) * width + (x + bx)) * 4;
+								byte r = blockR[by * 4 + bx];
+								rawData[outOffset + 0] = r;
+								rawData[outOffset + 1] = r;
+								rawData[outOffset + 2] = r;
+								rawData[outOffset + 3] = 255;
+							}
+						}
+					}
+				}
+			}
+
+			return rawData;
+		}
+
+		private byte[] DecompressBC5(DDSStruct header, byte[] data)
+		{
+			int width = (int)header.width;
+			int height = (int)header.height;
+			int depth = (int)header.depth;
+			if (depth == 0) depth = 1;
+
+			byte[] rawData = new byte[width * height * depth * 4];
+			int dataOffset = 0;
+
+			for (int z = 0; z < depth; z++)
+			{
+				for (int y = 0; y < height; y += 4)
+				{
+					for (int x = 0; x < width; x += 4)
+					{
+						if (dataOffset + 16 > data.Length) break;
+
+						byte[] blockR = DecodeBC4Block(data, dataOffset);
+						byte[] blockG = DecodeBC4Block(data, dataOffset + 8);
+						dataOffset += 16;
+
+						for (int by = 0; by < 4 && (y + by) < height; by++)
+						{
+							for (int bx = 0; bx < 4 && (x + bx) < width; bx++)
+							{
+								int outOffset = ((z * height + (y + by)) * width + (x + bx)) * 4;
+								rawData[outOffset + 0] = blockR[by * 4 + bx];
+								rawData[outOffset + 1] = blockG[by * 4 + bx];
+								rawData[outOffset + 2] = 0;
+								rawData[outOffset + 3] = 255;
+							}
+						}
+					}
+				}
+			}
+
+			return rawData;
+		}
+
+		private byte[] DecodeBC4Block(byte[] data, int offset)
+		{
+			byte[] result = new byte[16];
+			byte alpha0 = data[offset];
+			byte alpha1 = data[offset + 1];
+
+			byte[] alphas = new byte[8];
+			alphas[0] = alpha0;
+			alphas[1] = alpha1;
+
+			if (alpha0 > alpha1)
+			{
+				alphas[2] = (byte)((6 * alpha0 + 1 * alpha1 + 3) / 7);
+				alphas[3] = (byte)((5 * alpha0 + 2 * alpha1 + 3) / 7);
+				alphas[4] = (byte)((4 * alpha0 + 3 * alpha1 + 3) / 7);
+				alphas[5] = (byte)((3 * alpha0 + 4 * alpha1 + 3) / 7);
+				alphas[6] = (byte)((2 * alpha0 + 5 * alpha1 + 3) / 7);
+				alphas[7] = (byte)((1 * alpha0 + 6 * alpha1 + 3) / 7);
+			}
+			else
+			{
+				alphas[2] = (byte)((4 * alpha0 + 1 * alpha1 + 2) / 5);
+				alphas[3] = (byte)((3 * alpha0 + 2 * alpha1 + 2) / 5);
+				alphas[4] = (byte)((2 * alpha0 + 3 * alpha1 + 2) / 5);
+				alphas[5] = (byte)((1 * alpha0 + 4 * alpha1 + 2) / 5);
+				alphas[6] = 0;
+				alphas[7] = 255;
+			}
+
+			// Read 48-bit index table
+			ulong indices = 0;
+			for (int i = 0; i < 6; i++)
+			{
+				indices |= (ulong)data[offset + 2 + i] << (i * 8);
+			}
+
+			for (int i = 0; i < 16; i++)
+			{
+				int idx = (int)((indices >> (i * 3)) & 0x7);
+				result[i] = alphas[idx];
+			}
+
+			return result;
+		}
+		#endregion
+
 		#region UNUSED
 		private unsafe byte[] DecompressARGB(DDSStruct header, byte[] data, PixelFormat pixelFormat)
 		{
@@ -1917,6 +2558,53 @@ namespace IPFBrowser.FileFormats.DDS
 		private const uint FOURCC_rNULL = 0x72;
 		private const uint FOURCC_sNULL = 0x73;
 		private const uint FOURCC_tNULL = 0x74;
+		private const uint FOURCC_DX10 = 0x30315844; // 'DX10'
+		private const uint FOURCC_BC4U = 0x55344342; // 'BC4U'
+		private const uint FOURCC_BC4S = 0x53344342; // 'BC4S'
+		private const uint FOURCC_BC5U = 0x55354342; // 'BC5U'
+		private const uint FOURCC_BC5S = 0x53354342; // 'BC5S'
+		#endregion
+
+		#region DXGI Format values
+		private const uint DXGI_FORMAT_BC1_TYPELESS = 70;
+		private const uint DXGI_FORMAT_BC1_UNORM = 71;
+		private const uint DXGI_FORMAT_BC1_UNORM_SRGB = 72;
+		private const uint DXGI_FORMAT_BC2_TYPELESS = 73;
+		private const uint DXGI_FORMAT_BC2_UNORM = 74;
+		private const uint DXGI_FORMAT_BC2_UNORM_SRGB = 75;
+		private const uint DXGI_FORMAT_BC3_TYPELESS = 76;
+		private const uint DXGI_FORMAT_BC3_UNORM = 77;
+		private const uint DXGI_FORMAT_BC3_UNORM_SRGB = 78;
+		private const uint DXGI_FORMAT_BC4_TYPELESS = 79;
+		private const uint DXGI_FORMAT_BC4_UNORM = 80;
+		private const uint DXGI_FORMAT_BC4_SNORM = 81;
+		private const uint DXGI_FORMAT_BC5_TYPELESS = 82;
+		private const uint DXGI_FORMAT_BC5_UNORM = 83;
+		private const uint DXGI_FORMAT_BC5_SNORM = 84;
+		private const uint DXGI_FORMAT_BC6H_TYPELESS = 94;
+		private const uint DXGI_FORMAT_BC6H_UF16 = 95;
+		private const uint DXGI_FORMAT_BC6H_SF16 = 96;
+		private const uint DXGI_FORMAT_BC7_TYPELESS = 97;
+		private const uint DXGI_FORMAT_BC7_UNORM = 98;
+		private const uint DXGI_FORMAT_BC7_UNORM_SRGB = 99;
+		private const uint DXGI_FORMAT_R8G8B8A8_TYPELESS = 27;
+		private const uint DXGI_FORMAT_R8G8B8A8_UNORM = 28;
+		private const uint DXGI_FORMAT_R8G8B8A8_UNORM_SRGB = 29;
+		private const uint DXGI_FORMAT_B8G8R8A8_TYPELESS = 90;
+		private const uint DXGI_FORMAT_B8G8R8A8_UNORM = 87;
+		private const uint DXGI_FORMAT_B8G8R8A8_UNORM_SRGB = 91;
+		#endregion
+
+		#region DX10 Header
+		[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+		private struct DDS_HEADER_DXT10
+		{
+			public uint dxgiFormat;
+			public uint resourceDimension;
+			public uint miscFlag;
+			public uint arraySize;
+			public uint miscFlags2;
+		}
 		#endregion
 
 		#region PixelFormat
@@ -1972,6 +2660,22 @@ namespace IPFBrowser.FileFormats.DDS
 			G32R32F,
 			A32B32G32R32F,
 			/// <summary>
+			/// BC7 Compression (DXGI)
+			/// </summary>
+			BC7,
+			/// <summary>
+			/// BC6H Compression (DXGI, HDR)
+			/// </summary>
+			BC6H,
+			/// <summary>
+			/// BC4 Compression (single channel)
+			/// </summary>
+			BC4,
+			/// <summary>
+			/// BC5 Compression (two channel)
+			/// </summary>
+			BC5,
+			/// <summary>
 			/// Unknown pixel format.
 			/// </summary>
 			UNKNOWN
@@ -2001,5 +2705,13 @@ namespace IPFBrowser.FileFormats.DDS
 	/// </summary>
 	public class UnknownFileFormatException : Exception
 	{
+	}
+
+	/// <summary>
+	/// Thrown when the DDS format is not supported.
+	/// </summary>
+	public class UnsupportedFormatException : Exception
+	{
+		public UnsupportedFormatException(string message) : base(message) { }
 	}
 }

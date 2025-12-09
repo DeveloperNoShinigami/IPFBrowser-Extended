@@ -1,0 +1,95 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build IPFBrowser-Extended",
+			"type": "shell",
+			"command": "msbuild IPFBrowser.sln /p:Configuration=Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build IPFBrowser-Extended (dotnet)",
+			"type": "shell",
+			"command": "dotnet build IPFBrowser.sln --configuration Debug",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		}
+	]
+}
