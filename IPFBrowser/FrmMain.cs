@@ -78,6 +78,24 @@ namespace IPFBrowser
 		{
 			InitializeComponent();
 
+			// Hide toolbar buttons - we use double-click/context-menu for editing now
+			try
+			{
+				BtnEditIes.Visible = false;
+				BtnCancelEdit.Visible = false;
+			}
+			catch { /* Designer may not have these controls in some layouts */ }
+
+			// File list interaction: double-click to edit, right-click for context menu
+			LstFiles.DoubleClick += LstFiles_DoubleClick;
+
+			// Add shortcut for Discard All Changes (already implemented in MnuDiscardChanges handler)
+			try
+			{
+				MnuDiscardChanges.Shortcut = Shortcut.CtrlShiftK; // Ctrl+Shift+K to discard all
+			}
+			catch { /* Designer item may not be initialized in rare cases */ }
+
 			// Initialize file types
 			_fileTypes[".ies"] = new FileFormat("table.png", PreviewType.IesTable);
 
@@ -223,38 +241,57 @@ namespace IPFBrowser
 			// Create context menu for file list
 			_fileListContextMenu = new ContextMenuStrip();
 			var applyTextureMenuItem = new ToolStripMenuItem("Apply as Texture to Body");
+			applyTextureMenuItem.Name = "applyTexture";
 			applyTextureMenuItem.Click += ApplyTextureToModel_Click;
 			_fileListContextMenu.Items.Add(applyTextureMenuItem);
 			
 			var applyFaceTextureMenuItem = new ToolStripMenuItem("Apply as Texture to Face/Attachment");
+			applyFaceTextureMenuItem.Name = "applyFaceTexture";
 			applyFaceTextureMenuItem.Click += ApplyTextureToAttachment_Click;
 			_fileListContextMenu.Items.Add(applyFaceTextureMenuItem);
 			
 			var applyAttachmentMenuItem = new ToolStripMenuItem("Apply as Attachment to 3D Model (Face/Hair)");
+			applyAttachmentMenuItem.Name = "applyAttachment";
 			applyAttachmentMenuItem.Click += ApplyAttachmentToModel_Click;
 			_fileListContextMenu.Items.Add(applyAttachmentMenuItem);
 			
 			var applyAnimationMenuItem = new ToolStripMenuItem("Apply Animation to Model");
+			applyAnimationMenuItem.Name = "applyAnimation";
 			applyAnimationMenuItem.Click += ApplyAnimationToModel_Click;
 			_fileListContextMenu.Items.Add(applyAnimationMenuItem);
 			
 			var showRequiredTexturesMenuItem = new ToolStripMenuItem("Show Required Textures");
+			showRequiredTexturesMenuItem.Name = "showRequiredTextures";
 			showRequiredTexturesMenuItem.Click += ShowRequiredTextures_Click;
 			_fileListContextMenu.Items.Add(showRequiredTexturesMenuItem);
+
+			// Add quick Edit and Discard actions to the file list context menu
+			var editMenuItem = new ToolStripMenuItem("Edit");
+			editMenuItem.Name = "edit";
+			editMenuItem.Click += (s, ev) => { LstFiles_DoubleClick(LstFiles, EventArgs.Empty); };
+			_fileListContextMenu.Items.Add(editMenuItem);
+
+			var discardMenuItem = new ToolStripMenuItem("Discard Changes");
+			discardMenuItem.Name = "discard";
+			discardMenuItem.Click += (s, ev) => { DiscardChangesForSelectedFile(); };
+			_fileListContextMenu.Items.Add(discardMenuItem);
 			
 			_fileListContextMenu.Items.Add(new ToolStripSeparator());
 			
 			var extractMenuItem = new ToolStripMenuItem("Extract File...");
+			extractMenuItem.Name = "extract";
 			extractMenuItem.Click += (s, ev) => BtnExtractFile_Click(s, ev);
 			_fileListContextMenu.Items.Add(extractMenuItem);
 			
 			var removeImportMenuItem = new ToolStripMenuItem("Remove Imported File");
+			removeImportMenuItem.Name = "removeImport";
 			removeImportMenuItem.Click += RemoveImportedFile_Click;
 			_fileListContextMenu.Items.Add(removeImportMenuItem);
 			
 			_fileListContextMenu.Items.Add(new ToolStripSeparator());
 			
 			var deleteFileMenuItem = new ToolStripMenuItem("Delete File from IPF");
+			deleteFileMenuItem.Name = "deleteFile";
 			deleteFileMenuItem.Click += DeleteFileFromIpf_Click;
 			_fileListContextMenu.Items.Add(deleteFileMenuItem);
 			
@@ -633,10 +670,29 @@ namespace IPFBrowser
 				var ext = Path.GetExtension(fileName).ToLowerInvariant();
 				BtnEditIes.Enabled = (ext == ".ies");
 
-				// Check if this file has pending changes - if so, show the edit view
+				// Check if this file has pending changes - if so, just show the pending edits
 				if (_pendingChanges.ContainsKey(fileName))
 				{
-					ShowIesEditor(fileName, _pendingChanges[fileName]);
+					// Load the original XML so revert detection works correctly
+					var originalXml = LoadOriginalIesXml(fileName) ?? _pendingChanges[fileName];
+					
+					_currentIesFilePath = fileName;
+					_currentIesXml = originalXml;  // Store original so equality check detects changes
+					_isEditingIes = true;
+					
+					ResetPreview();
+					SetTextPreviewStyle(ScintillaNET.Lexer.Xml);
+					TxtPreview.ReadOnly = false;
+					TxtPreview.Text = _pendingChanges[fileName];  // Show pending edits in editor
+					TxtPreview.Visible = true;
+					
+					TxtPreview.TextChanged -= TxtPreview_TextChanged;
+					TxtPreview.TextChanged += TxtPreview_TextChanged;
+					
+					BtnEditIes.Enabled = false;
+					UpdatePendingChangesUI();
+					LblFileName.Text = fileName + " (Modified)";
+					TxtPreview.Focus();
 					return;
 				}
 
@@ -680,7 +736,19 @@ namespace IPFBrowser
 		/// </summary>
 		private void LstFiles_MouseUp(object sender, MouseEventArgs e)
 		{
-			if (e.Button != MouseButtons.Right)
+			if (e.Button == MouseButtons.Right)
+			{
+				// Show our context menu for the selected item
+				if (LstFiles.SelectedItems.Count > 0 && _fileListContextMenu != null)
+				{
+					var filePath = (string)LstFiles.SelectedItems[0].Tag;
+					_fileListContextMenu.Items[0].Enabled = true; // Edit
+					_fileListContextMenu.Items[1].Enabled = _pendingChanges.ContainsKey(filePath) || _importedFiles.ContainsKey(filePath);
+					_fileListContextMenu.Show(LstFiles, e.Location);
+				}
+				_isRightClick = false;
+			}
+			else
 			{
 				_isRightClick = false;
 			}
@@ -889,8 +957,19 @@ namespace IPFBrowser
 					switch (previewType)
 					{
 						case PreviewType.Text:
-							var txtData = getData();
-							var text = Encoding.UTF8.GetString(txtData);
+							// Prefer in-memory pending changes for this file so we don't overwrite
+							// user edits when re-selecting the file.
+							string text;
+							if (_pendingChanges.TryGetValue(fileTag, out var pendingText))
+							{
+								text = pendingText;
+							}
+							else
+							{
+								var txtData = getData();
+								try { text = Encoding.UTF8.GetString(txtData); }
+								catch { text = Encoding.Default.GetString(txtData); }
+							}
 
 							SetTextPreviewStyle(lexer);
 
@@ -2362,47 +2441,30 @@ namespace IPFBrowser
 			var hasModel = _modelViewer != null && _modelViewer.HasModel;
 			var hasAttachments = _modelViewer != null && _modelViewer.HasAttachments;
 			
-			// Index 0: Apply as Texture to Body
-			_fileListContextMenu.Items[0].Visible = isTexture && hasModel;
-			_fileListContextMenu.Items[0].Enabled = isTexture && hasModel;
-			
-			// Index 1: Apply as Texture to Face/Attachment
-			_fileListContextMenu.Items[1].Visible = isTexture && hasModel && hasAttachments;
-			_fileListContextMenu.Items[1].Enabled = isTexture && hasModel && hasAttachments;
-			
-			// Index 2: Apply as Attachment (for XAC files when model is loaded)
-			_fileListContextMenu.Items[2].Visible = isXac && hasModel;
-			_fileListContextMenu.Items[2].Enabled = isXac && hasModel;
-			
-			// Index 3: Apply Animation to Model (for XSM files when model is loaded)
-			_fileListContextMenu.Items[3].Visible = isXsm && hasModel;
-			_fileListContextMenu.Items[3].Enabled = isXsm && hasModel;
-			
-			// Index 4: Show Required Textures (for XAC files, or when viewing a model)
-			_fileListContextMenu.Items[4].Visible = isXac || (hasModel && !isTexture && !isXsm);
-			_fileListContextMenu.Items[4].Enabled = isXac || hasModel;
+			// Find items by Name so indices changes won't break visibility logic
+			ToolStripItem applyTexture = _fileListContextMenu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "applyTexture");
+			ToolStripItem applyFaceTexture = _fileListContextMenu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "applyFaceTexture");
+			ToolStripItem applyAttachment = _fileListContextMenu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "applyAttachment");
+			ToolStripItem applyAnimation = _fileListContextMenu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "applyAnimation");
+			ToolStripItem showRequiredTextures = _fileListContextMenu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "showRequiredTextures");
+			ToolStripItem extractItem = _fileListContextMenu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "extract");
+			ToolStripItem removeImportItem = _fileListContextMenu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "removeImport");
+			ToolStripItem deleteFileItem = _fileListContextMenu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "deleteFile");
 
-			// Index 5: Separator - show if any of the above options visible
-			_fileListContextMenu.Items[5].Visible = (isTexture || isXac || isXsm) && hasModel || isXac;
+			// Show "Apply as Texture" for image files when a model has been loaded
+			if (applyTexture != null) { applyTexture.Visible = isTexture && hasModel; applyTexture.Enabled = isTexture && hasModel; }
+			if (applyFaceTexture != null) { applyFaceTexture.Visible = isTexture && hasModel && hasAttachments; applyFaceTexture.Enabled = isTexture && hasModel && hasAttachments; }
+			if (applyAttachment != null) { applyAttachment.Visible = isXac && hasModel; applyAttachment.Enabled = isXac && hasModel; }
+			if (applyAnimation != null) { applyAnimation.Visible = isXsm && hasModel; applyAnimation.Enabled = isXsm && hasModel; }
+			if (showRequiredTextures != null) { showRequiredTextures.Visible = isXac || (hasModel && !isTexture && !isXsm); showRequiredTextures.Enabled = isXac || hasModel; }
 
-			// Index 6: Extract File - always visible
-			// Index 7: Remove Imported File
+			// Imported / extract / delete items
 			var fileTagStr = filePath;
 			var isImported = _importedFiles.ContainsKey(fileTagStr);
-			_fileListContextMenu.Items[7].Visible = isImported;
-			_fileListContextMenu.Items[7].Enabled = isImported;
-
-			// Index 8: Separator
-			// Index 9: Delete File from IPF
+			if (removeImportItem != null) { removeImportItem.Visible = isImported; removeImportItem.Enabled = isImported; }
 			var isMainIpfFile = _files.ContainsKey(fileTagStr) && !isImported;
 			var isAlreadyDeleted = _deletedFiles.Contains(fileTagStr);
-			_fileListContextMenu.Items[9].Visible = isMainIpfFile;
-			_fileListContextMenu.Items[9].Enabled = isMainIpfFile && !isAlreadyDeleted;
-			
-			if (isAlreadyDeleted)
-				_fileListContextMenu.Items[9].Text = "Already marked for deletion";
-			else
-				_fileListContextMenu.Items[9].Text = "Delete File from IPF";
+			if (deleteFileItem != null) { deleteFileItem.Visible = isMainIpfFile; deleteFileItem.Enabled = isMainIpfFile && !isAlreadyDeleted; deleteFileItem.Text = isAlreadyDeleted ? "Already marked for deletion" : "Delete File from IPF"; }
 		}
 		
 		/// <summary>
@@ -3066,6 +3128,10 @@ namespace IPFBrowser
 			TxtPreview.ReadOnly = false;
 			TxtPreview.Text = xml;
 			TxtPreview.Visible = true;
+			
+			// Subscribe to text changes for real-time indicator updates
+			TxtPreview.TextChanged -= TxtPreview_TextChanged;
+			TxtPreview.TextChanged += TxtPreview_TextChanged;
 
 			BtnEditIes.Enabled = false;
 			UpdatePendingChangesUI();
@@ -3075,6 +3141,182 @@ namespace IPFBrowser
 			LblFileName.Text = filePath + (hasChanges ? " (Modified)" : " (Editing)");
 
 			// Focus the text editor so user can start typing immediately
+			TxtPreview.Focus();
+		}
+
+		/// <summary>
+		/// Called when text changes in the IES editor. Updates file list indicator in real-time.
+		/// </summary>
+		private void TxtPreview_TextChanged(object sender, EventArgs e)
+		{
+			if (!_isEditingIes || string.IsNullOrEmpty(_currentIesFilePath))
+				return;
+
+			// If the current text equals the original loaded content, remove pending change
+			var currentText = TxtPreview.Text ?? string.Empty;
+			var originalText = _currentIesXml ?? string.Empty;
+
+			if (currentText.Equals(originalText, StringComparison.Ordinal))
+			{
+				if (_pendingChanges.ContainsKey(_currentIesFilePath))
+				{
+					_pendingChanges.Remove(_currentIesFilePath);
+					UpdateFileListIndicator(_currentIesFilePath);
+				}
+			}
+			else
+			{
+				// Store the current edit to pending changes
+				_pendingChanges[_currentIesFilePath] = currentText;
+				UpdateFileListIndicator(_currentIesFilePath);
+			}
+
+			// Update UI status
+			UpdatePendingChangesUI();
+		}
+
+		/// <summary>
+		/// Updates the visual indicator (*, +, ×) for a specific file in the file list.
+		/// </summary>
+		private void UpdateFileListIndicator(string filePath)
+		{
+			// Find the item in the file list
+			foreach (ListViewItem item in LstFiles.Items)
+			{
+				if ((string)item.Tag == filePath)
+				{
+					// Get the file name without any existing indicator
+					var displayText = Path.GetFileName(filePath);
+
+					// Determine the new display text with indicator
+					string newDisplayText = displayText;
+					if (_deletedFiles.Contains(filePath))
+						newDisplayText = "✕ " + displayText;
+					else if (_pendingChanges.ContainsKey(filePath))
+						newDisplayText = "* " + displayText;
+					else if (_importedFiles.ContainsKey(filePath))
+						newDisplayText = "+ " + displayText;
+
+					// Update if text changed
+					if (item.Text != newDisplayText)
+					{
+						item.Text = newDisplayText;
+
+						// Update color
+						if (_deletedFiles.Contains(filePath))
+							item.ForeColor = Color.Red;
+						else if (_pendingChanges.ContainsKey(filePath))
+							item.ForeColor = Color.DarkOrange;
+						else if (_importedFiles.ContainsKey(filePath))
+							item.ForeColor = Color.Green;
+						else
+							item.ForeColor = SystemColors.WindowText;
+					}
+					break;
+				}
+			}
+		}
+
+		/// <summary>
+		/// Double-click handler for files list - open editor if file is editable.
+		/// </summary>
+		private void LstFiles_DoubleClick(object sender, EventArgs e)
+		{
+			if (LstFiles.SelectedItems.Count == 0)
+				return;
+
+			var item = LstFiles.SelectedItems[0];
+			var filePath = (string)item.Tag;
+			var ext = Path.GetExtension(filePath).ToLowerInvariant();
+
+			// If it's an IES specifically, keep existing flow
+			if (ext == ".ies")
+			{
+				BtnEditIes_Click(this, EventArgs.Empty);
+				return;
+			}
+
+			// If this is a text-like format, open generic text editor
+			FileFormat fileType;
+			if (_fileTypes.TryGetValue(ext, out fileType) && fileType.PreviewType == PreviewType.Text)
+			{
+				OpenTextEditorForFile(filePath);
+			}
+		}
+
+        
+
+		/// <summary>
+		/// Discards changes for the currently selected file (used by context menu).
+		/// </summary>
+		private void DiscardChangesForSelectedFile()
+		{
+			if (LstFiles.SelectedItems.Count == 0)
+				return;
+
+			var item = LstFiles.SelectedItems[0];
+			var filePath = (string)item.Tag;
+
+			// If this is the currently edited file, set current path so existing method works
+			_currentIesFilePath = filePath;
+			_isEditingIes = _pendingChanges.ContainsKey(filePath) || _isEditingIes;
+
+			DiscardCurrentChanges();
+		}
+
+		/// <summary>
+		/// Opens a generic text editor for a non-IES text-like file.
+		/// Loads content into TxtPreview and enables live pending-change tracking.
+		/// </summary>
+		private void OpenTextEditorForFile(string filePath)
+		{
+			byte[] data = null;
+
+			// Imported file?
+			if (_importedFiles.TryGetValue(filePath, out var imported))
+			{
+				data = imported;
+			}
+			else if (filePath.StartsWith("IPF") && filePath.Contains(":"))
+			{
+				if (_additionalFiles.TryGetValue(filePath, out var addFile))
+					data = addFile.GetData();
+				else
+					return;
+			}
+			else if (_files.TryGetValue(filePath, out var ipfFile))
+			{
+				data = ipfFile.GetData();
+			}
+			else
+			{
+				return;
+			}
+
+			string text;
+			try { text = System.Text.Encoding.UTF8.GetString(data); }
+			catch { text = System.Text.Encoding.Default.GetString(data); }
+
+			// Prepare editor
+			_currentIesFilePath = filePath;
+			_currentIesXml = text;
+			_isEditingIes = true;
+
+			ResetPreview();
+			SetTextPreviewStyle(ScintillaNET.Lexer.Null);
+
+			TxtPreview.ReadOnly = false;
+			TxtPreview.Text = text;
+			TxtPreview.Visible = true;
+
+			TxtPreview.TextChanged -= TxtPreview_TextChanged;
+			TxtPreview.TextChanged += TxtPreview_TextChanged;
+
+			BtnEditIes.Enabled = false;
+			UpdatePendingChangesUI();
+
+			LblFileName.Text = filePath + (_pendingChanges.ContainsKey(filePath) ? " (Modified)" : " (Editing)");
+
 			TxtPreview.Focus();
 		}
 
@@ -3096,7 +3338,15 @@ namespace IPFBrowser
 			// Check if we already have pending changes for this file
 			if (_pendingChanges.ContainsKey(fileName))
 			{
-				ShowIesEditor(fileName, _pendingChanges[fileName]);
+				// Load original xml and show editor preserving pending edits
+				var originalXml = LoadOriginalIesXml(fileName);
+				if (originalXml == null)
+				{
+					ShowIesEditor(fileName, _pendingChanges[fileName]);
+					return;
+				}
+				ShowIesEditor(fileName, originalXml);
+				TxtPreview.Text = _pendingChanges[fileName];
 				return;
 			}
 
@@ -3141,6 +3391,44 @@ namespace IPFBrowser
 			catch (Exception ex)
 			{
 				MessageBox.Show("Failed to load IES file: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+			}
+		}
+
+		/// <summary>
+		/// Loads the original IES XML for the given file path (from IPF/additional/imported),
+		/// or returns null on failure.
+		/// </summary>
+		private string LoadOriginalIesXml(string fileName)
+		{
+			try
+			{
+				byte[] iesData = null;
+				if (_importedFiles.TryGetValue(fileName, out var importedData))
+				{
+					iesData = importedData;
+				}
+				else if (fileName.StartsWith("IPF") && fileName.Contains(":"))
+				{
+					if (_additionalFiles.TryGetValue(fileName, out var additionalFile))
+						iesData = additionalFile.GetData();
+					else
+						return null;
+				}
+				else if (_files.TryGetValue(fileName, out var ipfFile))
+				{
+					iesData = ipfFile.GetData();
+				}
+				else
+				{
+					return null;
+				}
+
+				var iesFile = new IesFile(iesData);
+				return iesFile.GetXml();
+			}
+			catch
+			{
+				return null;
 			}
 		}
 
@@ -3490,25 +3778,49 @@ namespace IPFBrowser
 			if (result != DialogResult.Yes)
 				return;
 
-			_pendingChanges.Remove(_currentIesFilePath);
-			
-			// If it's an imported file, also remove from imports and tree
-			if (isImportedFile)
+		_pendingChanges.Remove(_currentIesFilePath);
+		
+		// If it's an imported file, also remove from imports and tree
+		if (isImportedFile)
+		{
+			_importedFiles.Remove(_currentIesFilePath);
+			RemoveImportedFileFromTree(_currentIesFilePath);
+		}
+		
+		_isEditingIes = false;
+		_currentIesFilePath = null;
+
+		UpdatePendingChangesUI();
+
+		// Refresh file list - directly update the file item to remove the indicator
+		foreach (ListViewItem item in LstFiles.Items)
+		{
+			var filePath = (string)item.Tag;
+			if (_deletedFiles.Contains(filePath))
 			{
-				_importedFiles.Remove(_currentIesFilePath);
-				RemoveImportedFileFromTree(_currentIesFilePath);
+				item.Text = "✕ " + Path.GetFileName(filePath);
+				item.ForeColor = Color.Red;
 			}
-			
-			_isEditingIes = false;
-			_currentIesFilePath = null;
+			else if (_pendingChanges.ContainsKey(filePath))
+			{
+				item.Text = "* " + Path.GetFileName(filePath);
+				item.ForeColor = Color.DarkOrange;
+			}
+			else if (_importedFiles.ContainsKey(filePath))
+			{
+				item.Text = "+ " + Path.GetFileName(filePath);
+				item.ForeColor = Color.Green;
+			}
+			else
+			{
+				item.Text = Path.GetFileName(filePath);
+				item.ForeColor = SystemColors.WindowText;
+			}
+		}
 
-			UpdatePendingChangesUI();
-
-			// Refresh file list and preview
-			if (TreeFolders.SelectedNode != null)
-				TreeFolders_AfterSelect(TreeFolders, new TreeViewEventArgs(TreeFolders.SelectedNode));
-			
-			ResetPreview();
+		// Also refresh via TreeFolders in case needed
+		if (TreeFolders.SelectedNode != null)
+			TreeFolders_AfterSelect(TreeFolders, new TreeViewEventArgs(TreeFolders.SelectedNode));			ResetPreview();
 			if (BtnPreview.Checked)
 				Preview();
 			
@@ -3531,10 +3843,10 @@ namespace IPFBrowser
 
 			UpdatePendingChangesUI();
 
-			// Refresh preview
-			ResetPreview();
-			if (BtnPreview.Checked)
-				Preview();
+		// Refresh preview
+		ResetPreview();
+		if (BtnPreview.Checked)
+			Preview();
 			
 			if (_openedIpf != null)
 				LblFileName.Text = _openedIpf.FilePath;

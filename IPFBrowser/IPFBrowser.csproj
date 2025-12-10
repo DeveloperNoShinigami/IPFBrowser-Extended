@@ -24,6 +24,7 @@
     <WarningLevel>4</WarningLevel>
     <Prefer32Bit>false</Prefer32Bit>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -35,6 +36,7 @@
     <WarningLevel>4</WarningLevel>
     <Prefer32Bit>false</Prefer32Bit>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
   </PropertyGroup>
   <PropertyGroup>
     <ApplicationIcon>ipf_browser.ico</ApplicationIcon>
@@ -137,11 +139,11 @@
     <Content Include="ipf_browser.ico" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
-       Other similar extension points exist, see Microsoft.Common.targets.
-  <Target Name="BeforeBuild">
-  </Target>
+  <!-- Copy System.Resources.Extensions.dll to output after build -->
   <Target Name="AfterBuild">
+    <Copy SourceFiles="..\packages\System.Resources.Extensions.4.7.0\lib\netstandard2.0\System.Resources.Extensions.dll" DestinationFolder="$(OutDir)" Condition="Exists('..\packages\System.Resources.Extensions.4.7.0\lib\netstandard2.0\System.Resources.Extensions.dll')" />
+    <Copy SourceFiles="C:\\Program Files\\dotnet\\sdk\\7.0.203\\Sdks\\Microsoft.NET.Sdk\\tools\\net472\\System.Memory.dll" DestinationFolder="$(OutDir)" Condition="Exists('C:\\Program Files\\dotnet\\sdk\\7.0.203\\Sdks\\Microsoft.NET.Sdk\\tools\\net472\\System.Memory.dll')" />
+    <Copy SourceFiles="C:\\Program Files\\dotnet\\sdk\\7.0.203\\Sdks\\Microsoft.NET.Sdk\\tools\\net472\\System.Runtime.CompilerServices.Unsafe.dll" DestinationFolder="$(OutDir)" Condition="Exists('C:\\Program Files\\dotnet\\sdk\\7.0.203\\Sdks\\Microsoft.NET.Sdk\\tools\\net472\\System.Runtime.CompilerServices.Unsafe.dll')" />
+    <Copy SourceFiles="C:\\Program Files\\dotnet\\sdk\\7.0.203\\Sdks\\Microsoft.NET.Sdk\\tools\\net472\\System.Numerics.Vectors.dll" DestinationFolder="$(OutDir)" Condition="Exists('C:\\Program Files\\dotnet\\sdk\\7.0.203\\Sdks\\Microsoft.NET.Sdk\\tools\\net472\\System.Numerics.Vectors.dll')" />
   </Target>
-  -->
 </Project>

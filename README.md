@@ -2,6 +2,8 @@
 
 An extended version of IPF Browser with advanced features for viewing, editing, and managing IPF archive files from Tree of Savior.
 
+**👉 [Start Here: Quick Start Guide](QUICKSTART.md)** | **[Full Installation](INSTALL.md)** | **[Report Issues](https://github.com/DeveloperNoShinigami/IPFBrowser-Extended/issues)
+
 ## Features
 
 ### File Management
@@ -70,10 +72,24 @@ An extended version of IPF Browser with advanced features for viewing, editing, 
 
 Open `IPFBrowser.sln` in Visual Studio 2022 and build in Debug or Release mode.
 
-## Requirements
+## Installation & Requirements
 
-- .NET Framework 4.5 or later
-- Windows 7 or later
+### Quick Start
+- **Windows 7 or later** with **.NET Framework 4.5+** installed
+- Download the latest [Release](https://github.com/DeveloperNoShinigami/IPFBrowser-Extended/releases) and run `IPF Browser.exe`
+
+### Detailed Installation Guide
+See [**INSTALL.md**](INSTALL.md) for:
+- Complete system requirements
+- Build from source instructions  
+- Dependency information
+- Troubleshooting common issues
+
+### Minimum Requirements
+- **OS:** Windows 7 SP1 or later
+- **.NET Framework:** 4.5 or later
+- **RAM:** 512 MB
+- **Disk Space:** ~100 MB
 
 ## License
 
