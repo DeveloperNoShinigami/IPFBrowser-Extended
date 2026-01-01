@@ -89,6 +89,12 @@
     <Compile Include="FrmAbout.Designer.cs">
       <DependentUpon>FrmAbout.cs</DependentUpon>
     </Compile>
+    <Compile Include="FrmExtractDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="FrmExtractDialog.Designer.cs">
+      <DependentUpon>FrmExtractDialog.cs</DependentUpon>
+    </Compile>
     <Compile Include="FrmMain.cs">
       <SubType>Form</SubType>
     </Compile>

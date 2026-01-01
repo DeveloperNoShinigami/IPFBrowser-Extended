@@ -69,6 +69,9 @@ namespace IPFBrowser
 		
 		// Flag to prevent preview change on right-click
 		private bool _isRightClick = false;
+		
+		// Track selected tree nodes for multi-select
+		private List<TreeNode> _selectedTreeNodes = new List<TreeNode>();
 
 		/// <summary>
 		/// Initializes form.
@@ -278,10 +281,17 @@ namespace IPFBrowser
 			
 			_fileListContextMenu.Items.Add(new ToolStripSeparator());
 			
-			var extractMenuItem = new ToolStripMenuItem("Extract File...");
+			var extractMenuItem = new ToolStripMenuItem("Extract Selected File(s)...");
 			extractMenuItem.Name = "extract";
-			extractMenuItem.Click += (s, ev) => BtnExtractFile_Click(s, ev);
+			extractMenuItem.Click += ExtractSelectedFiles_Click;
 			_fileListContextMenu.Items.Add(extractMenuItem);
+			
+			var selectAllMenuItem = new ToolStripMenuItem("Select All Files in This Folder");
+			selectAllMenuItem.Name = "selectAll";
+			selectAllMenuItem.Click += SelectAllInFolder_Click;
+			_fileListContextMenu.Items.Add(selectAllMenuItem);
+			
+			_fileListContextMenu.Items.Add(new ToolStripSeparator());
 			
 			var removeImportMenuItem = new ToolStripMenuItem("Remove Imported File");
 			removeImportMenuItem.Name = "removeImport";
@@ -297,6 +307,24 @@ namespace IPFBrowser
 			
 			LstFiles.ContextMenuStrip = _fileListContextMenu;
 			_fileListContextMenu.Opening += FileListContextMenu_Opening;
+			
+			// Create context menu for folder tree
+			var folderContextMenu = new ContextMenuStrip();
+			var extractFolderMenuItem = new ToolStripMenuItem("Extract This Folder...");
+			extractFolderMenuItem.Name = "extractFolder";
+			extractFolderMenuItem.Click += ExtractFolder_Click;
+			folderContextMenu.Items.Add(extractFolderMenuItem);
+			var extractSelectedFoldersMenuItem = new ToolStripMenuItem("Extract Selected Folders...");
+			extractSelectedFoldersMenuItem.Name = "extractSelectedFolders";
+			extractSelectedFoldersMenuItem.Click += ExtractSelectedFolders_Click;
+			folderContextMenu.Items.Add(extractSelectedFoldersMenuItem);
+			folderContextMenu.Opening += FolderContextMenu_Opening;
+			TreeFolders.ContextMenuStrip = folderContextMenu;
+			
+			// Add mouse event handlers for tree multi-select
+			TreeFolders.MouseDown += TreeFolders_MouseDown;
+			TreeFolders.DrawMode = TreeViewDrawMode.OwnerDrawText;
+			TreeFolders.DrawNode += TreeFolders_DrawNode;
 			
 			// Handle right-click to prevent preview change
 			LstFiles.MouseDown += LstFiles_MouseDown;
@@ -2458,6 +2486,9 @@ namespace IPFBrowser
 			if (applyAnimation != null) { applyAnimation.Visible = isXsm && hasModel; applyAnimation.Enabled = isXsm && hasModel; }
 			if (showRequiredTextures != null) { showRequiredTextures.Visible = isXac || (hasModel && !isTexture && !isXsm); showRequiredTextures.Enabled = isXac || hasModel; }
 
+			// Extract is always available
+			if (extractItem != null) { extractItem.Visible = true; extractItem.Enabled = true; extractItem.Text = LstFiles.SelectedItems.Count > 1 ? $"Extract {LstFiles.SelectedItems.Count} Selected File(s)..." : "Extract Selected File..."; }
+
 			// Imported / extract / delete items
 			var fileTagStr = filePath;
 			var isImported = _importedFiles.ContainsKey(fileTagStr);
@@ -2848,7 +2879,18 @@ namespace IPFBrowser
 		/// <param name="e"></param>
 		private void BtnExtractPack_Click(object sender, EventArgs e)
 		{
-			FbdExtractPack.Description = "Select folder to extract pack to.";
+			// Show dialog to select files/IPFs to extract
+			var dlg = new FrmExtractDialog(_openedIpf, _files, _additionalIpfs, _additionalFiles);
+			if (dlg.ShowDialog() != DialogResult.OK)
+				return;
+
+			if (dlg.SelectedFiles.Count == 0)
+			{
+				MessageBox.Show("No files selected.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			FbdExtractPack.Description = "Select folder to extract files to.";
 			FbdExtractPack.ShowNewFolderButton = true;
 
 			if (FbdExtractPack.ShowDialog() != DialogResult.OK)
@@ -2862,7 +2904,88 @@ namespace IPFBrowser
 				return;
 			}
 
-			ExtractFiles(_openedIpf.Files, extractPath);
+			// Group files by source IPF
+			var filesByIpf = dlg.SelectedFiles.GroupBy(f => f.SourceIpfIndex).ToList();
+
+			// If extracting from multiple IPFs, create per-IPF folders
+			bool multipleIpfs = filesByIpf.Count > 1;
+			
+			var progressDlg = new FrmProgress(dlg.SelectedFiles.Count);
+			progressDlg.StartPosition = FormStartPosition.CenterScreen;
+			progressDlg.TopMost = true;
+			progressDlg.Show(this);
+			progressDlg.BringToFront();
+			Application.DoEvents();
+			
+			int extractedCount = 0;
+
+			foreach (var ipfGroup in filesByIpf)
+			{
+				var targetFolder = extractPath;
+				if (multipleIpfs)
+				{
+					// Create a folder for this IPF
+					string ipfName;
+					if (ipfGroup.Key == -1)
+					{
+						ipfName = Path.GetFileNameWithoutExtension(_openedIpf.FilePath);
+					}
+					else
+					{
+						ipfName = Path.GetFileNameWithoutExtension(_additionalIpfs[ipfGroup.Key].FilePath);
+					}
+					targetFolder = Path.Combine(extractPath, ipfName);
+					Directory.CreateDirectory(targetFolder);
+				}
+
+				// Extract all files from this IPF
+				foreach (var item in ipfGroup)
+				{
+					if (progressDlg.Cancel)
+						break;
+						
+					var fileTag = item.FileTag;
+					var fileName = item.FileName;
+					try
+					{
+						IpfFile ipfFile = null;
+						if (fileTag.StartsWith("IPF") && fileTag.Contains(":"))
+						{
+							if (!_additionalFiles.TryGetValue(fileTag, out ipfFile))
+								continue;
+						}
+						else if (!_files.TryGetValue(fileTag, out ipfFile))
+						{
+							continue;
+						}
+
+						// Create directories as needed
+						var outputPath = Path.Combine(targetFolder, fileName);
+						var outputDir = Path.GetDirectoryName(outputPath);
+						Directory.CreateDirectory(outputDir);
+
+						// Extract file
+						var fileData = ipfFile.GetData();
+						File.WriteAllBytes(outputPath, fileData);
+						extractedCount++;
+					}
+					catch (Exception ex)
+					{
+						MessageBox.Show($"Error extracting {fileName}: {ex.Message}", Text, 
+							MessageBoxButtons.OK, MessageBoxIcon.Error);
+					}
+					
+					progressDlg.UpdateProgress(extractedCount);
+					Application.DoEvents();
+				}
+				
+				if (progressDlg.Cancel)
+					break;
+			}
+
+			progressDlg.Close();
+			MessageBox.Show($"Extracted {extractedCount} file(s) successfully.", Text, 
+				MessageBoxButtons.OK, MessageBoxIcon.Information);
 		}
 
 		/// <summary>
@@ -2873,45 +2996,545 @@ namespace IPFBrowser
 		/// <param name="e"></param>
 		private void BtnExtractFile_Click(object sender, EventArgs e)
 		{
-			if (LstFiles.SelectedIndices.Count == 0)
+			// Show dialog to select file(s) to extract
+			var dlg = new FrmExtractDialog(_openedIpf, _files, _additionalIpfs, _additionalFiles);
+			if (dlg.ShowDialog() != DialogResult.OK)
 				return;
 
-			var selected = LstFiles.SelectedItems[0];
-			var fileTag = (string)selected.Tag;
-			
-			// Try to find the file in main files or additional files
-			IpfFile ipfFile = null;
-			if (fileTag.StartsWith("IPF") && fileTag.Contains(":"))
+			if (dlg.SelectedFiles.Count == 0)
 			{
-				// This is from an additional IPF
-				if (!_additionalFiles.TryGetValue(fileTag, out ipfFile))
-				{
-					MessageBox.Show("Could not find file in additional IPFs.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+				MessageBox.Show("No files selected.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			// If only one file, use Save dialog; otherwise use folder dialog
+			if (dlg.SelectedFiles.Count == 1)
+			{
+				var selectedFile = dlg.SelectedFiles[0];
+				var fileTag = selectedFile.FileTag;
+				var fileName = selectedFile.FileName;
+				var displayName = Path.GetFileName(fileName);
+				SavExtractFile.FileName = displayName;
+
+				if (SavExtractFile.ShowDialog() != DialogResult.OK)
 					return;
+
+				try
+				{
+					IpfFile ipfFile = null;
+					if (fileTag.StartsWith("IPF") && fileTag.Contains(":"))
+					{
+						if (!_additionalFiles.TryGetValue(fileTag, out ipfFile))
+						{
+							MessageBox.Show("File not found.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+							return;
+						}
+					}
+					else if (!_files.TryGetValue(fileTag, out ipfFile))
+					{
+						MessageBox.Show("File not found.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+						return;
+					}
+
+					var fileData = ipfFile.GetData();
+					File.WriteAllBytes(SavExtractFile.FileName, fileData);
+					MessageBox.Show("File extracted successfully.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				}
+				catch (Exception ex)
+				{
+					MessageBox.Show($"Error extracting file: {ex.Message}", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
 				}
 			}
 			else
 			{
-				// This is from the main IPF
-				if (!_files.TryGetValue(fileTag, out ipfFile))
+				// Multiple files - use folder browser
+				FbdExtractPack.Description = "Select folder to extract files to.";
+				FbdExtractPack.ShowNewFolderButton = true;
+
+				if (FbdExtractPack.ShowDialog() != DialogResult.OK)
+					return;
+
+				var extractPath = FbdExtractPack.SelectedPath;
+
+				if (!Directory.Exists(extractPath))
 				{
-					MessageBox.Show("Could not find file in main IPF.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+					MessageBox.Show("Directory not found.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
 					return;
 				}
+
+				// Group files by source IPF
+				var filesByIpf = dlg.SelectedFiles.GroupBy(f => f.SourceIpfIndex).ToList();
+				bool multipleIpfs = filesByIpf.Count() > 1;
+				int extractedCount = 0;
+
+				foreach (var ipfGroup in filesByIpf)
+				{
+					var targetFolder = extractPath;
+					if (multipleIpfs)
+					{
+						string ipfName;
+						if (ipfGroup.Key == -1)
+						{
+							ipfName = Path.GetFileNameWithoutExtension(_openedIpf.FilePath);
+						}
+						else
+						{
+							ipfName = Path.GetFileNameWithoutExtension(_additionalIpfs[ipfGroup.Key].FilePath);
+						}
+						targetFolder = Path.Combine(extractPath, ipfName);
+						Directory.CreateDirectory(targetFolder);
+					}
+
+					foreach (var item in ipfGroup)
+					{
+						var fileTag = item.FileTag;
+						var fileName = item.FileName;
+						try
+						{
+							IpfFile ipfFile = null;
+							if (fileTag.StartsWith("IPF") && fileTag.Contains(":"))
+							{
+								if (!_additionalFiles.TryGetValue(fileTag, out ipfFile))
+									continue;
+							}
+							else if (!_files.TryGetValue(fileTag, out ipfFile))
+							{
+								continue;
+							}
+
+							var outputPath = Path.Combine(targetFolder, fileName);
+							var outputDir = Path.GetDirectoryName(outputPath);
+							Directory.CreateDirectory(outputDir);
+
+							var fileData = ipfFile.GetData();
+							File.WriteAllBytes(outputPath, fileData);
+							extractedCount++;
+						}
+						catch (Exception ex)
+						{
+							MessageBox.Show($"Error extracting {fileName}: {ex.Message}", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+						}
+					}
+				}
+
+				MessageBox.Show($"Extracted {extractedCount} file(s) successfully.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
 			}
-			
-			var fileName = Path.GetFileName(ipfFile.FullPath);
-			var ext = Path.GetExtension(fileName);
+		}
 
-			SavExtractFile.FileName = fileName;
-
-			if (SavExtractFile.ShowDialog() != DialogResult.OK)
+		/// <summary>
+		/// Extracts an entire folder from the tree view.
+		/// </summary>
+		private void ExtractFolder_Click(object sender, EventArgs e)
+		{
+			if (TreeFolders.SelectedNode == null)
 				return;
 
-			var savePath = SavExtractFile.FileName;
+			FbdExtractPack.Description = "Select folder to extract files to.";
+			FbdExtractPack.ShowNewFolderButton = true;
 
-			var file = ipfFile.GetData();
-			File.WriteAllBytes(savePath, file);
+			if (FbdExtractPack.ShowDialog() != DialogResult.OK)
+				return;
+
+			var extractPath = FbdExtractPack.SelectedPath;
+			if (!Directory.Exists(extractPath))
+			{
+				MessageBox.Show("Directory not found.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+				return;
+			}
+
+			var fullPath = TreeFolders.SelectedNode.FullPath.Replace('\\', '/');
+			var pathParts = fullPath.Split('/');
+			var firstPart = pathParts[0];
+			bool isAdditionalIpf = firstPart.EndsWith(".ipf");
+			
+			var filesToExtract = new List<IpfFile>();
+			string ipfName;
+
+			if (isAdditionalIpf)
+			{
+				// Additional IPF folder: "char_texture.ipf/misc/accessory" -> "misc/accessory"
+				var pathWithoutIpf = string.Join("/", pathParts.Skip(1));
+				var searchPath = pathWithoutIpf + "/";
+				
+				// Find IPF index
+				int ipfIndex = -1;
+				foreach (var kvp in _additionalFiles)
+				{
+					var colonIndex = kvp.Key.IndexOf(':');
+					if (colonIndex > 0)
+					{
+						var filePath = kvp.Key.Substring(colonIndex + 1);
+						if (filePath.StartsWith(searchPath) || filePath == pathWithoutIpf)
+						{
+							if (ipfIndex == -1)
+								ipfIndex = int.Parse(kvp.Key.Substring(3, colonIndex - 3)) - 1;
+							filesToExtract.Add(kvp.Value);
+						}
+					}
+				}
+				ipfName = ipfIndex >= 0 ? Path.GetFileNameWithoutExtension(_additionalIpfs[ipfIndex].FilePath) 
+					: Path.GetFileNameWithoutExtension(_openedIpf.FilePath);
+			}
+			else
+			{
+				// Main IPF folder
+				var searchPath = fullPath + "/";
+				foreach (var kvp in _files)
+				{
+					var filePath = kvp.Key.Replace('\\', '/');
+					if (filePath.StartsWith(searchPath) || filePath == fullPath)
+						filesToExtract.Add(kvp.Value);
+				}
+				ipfName = Path.GetFileNameWithoutExtension(_openedIpf.FilePath);
+			}
+
+			if (filesToExtract.Count == 0)
+			{
+				MessageBox.Show("No files found in folder.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			var targetFolder = Path.Combine(extractPath, ipfName);
+			Directory.CreateDirectory(targetFolder);
+
+			var progressDlg = new FrmProgress(filesToExtract.Count);
+			progressDlg.StartPosition = FormStartPosition.CenterScreen;
+			progressDlg.TopMost = true;
+			progressDlg.Show(this);
+			progressDlg.BringToFront();
+			Application.DoEvents();
+
+			int extractedCount = 0;
+			foreach (var ipfFile in filesToExtract)
+			{
+				if (progressDlg.Cancel) break;
+
+				try
+				{
+					var outputPath = Path.Combine(targetFolder, ipfFile.Path);
+					Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+					File.WriteAllBytes(outputPath, ipfFile.GetData());
+					extractedCount++;
+				}
+				catch (Exception ex)
+				{
+					MessageBox.Show($"Error extracting file: {ex.Message}", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+				}
+
+				progressDlg.UpdateProgress(extractedCount);
+				Application.DoEvents();
+			}
+
+			progressDlg.Close();
+			MessageBox.Show($"Extracted {extractedCount} file(s).", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+		}
+
+		/// <summary>
+		/// Selects all files in the currently displayed folder in the file list.
+		/// </summary>
+		private void SelectAllInFolder_Click(object sender, EventArgs e)
+		{
+			LstFiles.BeginUpdate();
+			foreach (ListViewItem item in LstFiles.Items)
+			{
+				item.Selected = true;
+			}
+			LstFiles.EndUpdate();
+			LstFiles.Focus();
+		}
+
+		/// <summary>
+		/// Handle tree view mouse down for multi-select (Ctrl+Click)
+		/// </summary>
+		private void TreeFolders_MouseDown(object sender, MouseEventArgs e)
+		{
+			var clickedNode = TreeFolders.GetNodeAt(e.X, e.Y);
+			if (clickedNode != null)
+			{
+				// Right-click: if node not already selected, add it to selection
+				if (e.Button == MouseButtons.Right)
+				{
+					if (!_selectedTreeNodes.Contains(clickedNode))
+					{
+						_selectedTreeNodes.Add(clickedNode);
+						TreeFolders.Invalidate();
+					}
+					return; // Let context menu handle the rest
+				}
+
+				// Left-click with Ctrl: toggle selection
+				if (Control.ModifierKeys == Keys.Control)
+				{
+					if (_selectedTreeNodes.Contains(clickedNode))
+						_selectedTreeNodes.Remove(clickedNode);
+					else
+						_selectedTreeNodes.Add(clickedNode);
+					TreeFolders.Invalidate();
+				}
+				else
+				{
+					// Single select - clear others
+					_selectedTreeNodes.Clear();
+					_selectedTreeNodes.Add(clickedNode);
+					TreeFolders.SelectedNode = clickedNode;
+				}
+			}
+		}
+
+		/// <summary>
+		/// Draw selected tree nodes with highlight
+		/// </summary>
+		private void TreeFolders_DrawNode(object sender, DrawTreeNodeEventArgs e)
+		{
+			if (_selectedTreeNodes.Contains(e.Node))
+			{
+				// Draw with selection background
+				e.Graphics.FillRectangle(SystemBrushes.Highlight, e.Bounds);
+				TextRenderer.DrawText(e.Graphics, e.Node.Text, e.Node.TreeView.Font, e.Bounds, SystemColors.HighlightText, TextFormatFlags.VerticalCenter);
+			}
+			else
+			{
+				// Draw normally
+				e.Graphics.FillRectangle(SystemBrushes.Window, e.Bounds);
+				TextRenderer.DrawText(e.Graphics, e.Node.Text, e.Node.TreeView.Font, e.Bounds, SystemColors.WindowText, TextFormatFlags.VerticalCenter);
+			}
+		}
+
+		/// <summary>
+		/// Update folder context menu based on selection
+		/// </summary>
+		private void FolderContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+		{
+			var menu = sender as ContextMenuStrip;
+			if (menu == null) return;
+
+			var extractFolderItem = menu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "extractFolder");
+			var extractSelectedItem = menu.Items.Cast<ToolStripItem>().FirstOrDefault(i => i.Name == "extractSelectedFolders");
+			
+			// Show "Extract This Folder" for single selection, "Extract Selected Folders" for multiple
+			if (_selectedTreeNodes.Count > 1)
+			{
+				if (extractFolderItem != null) extractFolderItem.Visible = false;
+				if (extractSelectedItem != null)
+				{
+					extractSelectedItem.Visible = true;
+					extractSelectedItem.Text = $"Extract {_selectedTreeNodes.Count} Selected Folders...";
+				}
+			}
+			else
+			{
+				if (extractFolderItem != null) extractFolderItem.Visible = true;
+				if (extractSelectedItem != null) extractSelectedItem.Visible = false;
+			}
+		}
+
+		/// <summary>
+		/// Extract multiple selected folders
+		/// </summary>
+		private void ExtractSelectedFolders_Click(object sender, EventArgs e)
+		{
+			if (_selectedTreeNodes.Count == 0)
+			{
+				MessageBox.Show("No folders selected.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			FbdExtractPack.Description = "Select folder to extract files to.";
+			FbdExtractPack.ShowNewFolderButton = true;
+
+			if (FbdExtractPack.ShowDialog() != DialogResult.OK)
+				return;
+
+			var extractPath = FbdExtractPack.SelectedPath;
+			if (!Directory.Exists(extractPath))
+			{
+				MessageBox.Show("Directory not found.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+				return;
+			}
+
+			// Collect files with source IPF tracking: (filePath, IpfFile, ipfIndex)
+			var filesToExtract = new List<Tuple<string, IpfFile, int>>();
+			
+			foreach (var node in _selectedTreeNodes)
+			{
+				var tag = node.Tag as string;
+				
+				// Check if this is an additional IPF folder (has Tag like "IPF1:path")
+				if (!string.IsNullOrEmpty(tag) && tag.Contains(":") && tag.StartsWith("IPF"))
+				{
+					// Additional IPF folder: extract IPF index and path from Tag
+					var colonIndex = tag.IndexOf(':');
+					var ipfId = int.Parse(tag.Substring(3, colonIndex - 3)) - 1; // "IPF1:" -> 0
+					var folderPath = tag.Substring(colonIndex + 1); // "misc/accessory"
+					var searchPath = folderPath + "/";
+					
+					// Find all files in this folder from this specific IPF
+					foreach (var kvp in _additionalFiles)
+					{
+						var fileColonIndex = kvp.Key.IndexOf(':');
+						if (fileColonIndex <= 0) continue;
+						
+						var fileIpfId = int.Parse(kvp.Key.Substring(3, fileColonIndex - 3)) - 1;
+						if (fileIpfId != ipfId) continue; // Only files from same IPF
+						
+						var filePath = kvp.Key.Substring(fileColonIndex + 1);
+						if (filePath.StartsWith(searchPath) || filePath == folderPath)
+						{
+							filesToExtract.Add(new Tuple<string, IpfFile, int>(filePath, kvp.Value, ipfId));
+						}
+					}
+				}
+				else
+				{
+					// Main IPF folder - use node.Name which contains the path
+					var folderPath = node.Name.Replace('\\', '/');
+					var searchPath = folderPath;
+					if (!searchPath.EndsWith("/"))
+						searchPath += "/";
+					
+					foreach (var kvp in _files)
+					{
+						var filePath = kvp.Key.Replace('\\', '/');
+						if (filePath.StartsWith(searchPath) || filePath == folderPath.TrimEnd('/'))
+							filesToExtract.Add(new Tuple<string, IpfFile, int>(filePath, kvp.Value, -1));
+					}
+				}
+			}
+
+			if (filesToExtract.Count == 0)
+			{
+				MessageBox.Show("No files found in selected folders.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			// Group by IPF and extract
+			var filesByIpf = filesToExtract.GroupBy(f => f.Item3).ToList();
+			
+			var progressDlg = new FrmProgress(filesToExtract.Count);
+			progressDlg.StartPosition = FormStartPosition.CenterScreen;
+			progressDlg.TopMost = true;
+			progressDlg.Show(this);
+			progressDlg.BringToFront();
+			Application.DoEvents();
+
+			int extractedCount = 0;
+			foreach (var ipfGroup in filesByIpf)
+			{
+				string ipfName = ipfGroup.Key == -1 
+					? Path.GetFileNameWithoutExtension(_openedIpf.FilePath)
+					: Path.GetFileNameWithoutExtension(_additionalIpfs[ipfGroup.Key].FilePath);
+				
+				var targetFolder = Path.Combine(extractPath, ipfName);
+				Directory.CreateDirectory(targetFolder);
+
+				foreach (var item in ipfGroup)
+				{
+					if (progressDlg.Cancel) break;
+					
+					try
+					{
+						var outputPath = Path.Combine(targetFolder, item.Item2.Path);
+						Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+						File.WriteAllBytes(outputPath, item.Item2.GetData());
+						extractedCount++;
+					}
+					catch (Exception ex)
+					{
+						MessageBox.Show($"Error extracting {item.Item1}: {ex.Message}", Text,
+							MessageBoxButtons.OK, MessageBoxIcon.Error);
+					}
+
+					progressDlg.UpdateProgress(extractedCount);
+					Application.DoEvents();
+				}
+			}
+
+			progressDlg.Close();
+			MessageBox.Show($"Extracted {extractedCount} file(s) from {_selectedTreeNodes.Count} folder(s).", Text,
+				MessageBoxButtons.OK, MessageBoxIcon.Information);
+		}
+
+		/// <summary>
+		/// Extracts files selected in the main file list.
+		/// </summary>
+		private void ExtractSelectedFiles_Click(object sender, EventArgs e)
+		{
+			if (LstFiles.SelectedItems.Count == 0)
+			{
+				MessageBox.Show("No files selected.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+				return;
+			}
+
+			FbdExtractPack.Description = "Select folder to extract files to.";
+			FbdExtractPack.ShowNewFolderButton = true;
+
+			if (FbdExtractPack.ShowDialog() != DialogResult.OK)
+				return;
+
+			var extractPath = FbdExtractPack.SelectedPath;
+
+			if (!Directory.Exists(extractPath))
+			{
+				MessageBox.Show("Directory not found.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+				return;
+			}
+
+			// Create IPF-named folder
+			var ipfFolderName = Path.GetFileNameWithoutExtension(_openedIpf.FilePath);
+			var ipfExtractPath = Path.Combine(extractPath, ipfFolderName);
+			Directory.CreateDirectory(ipfExtractPath);
+
+			var progressDlg = new FrmProgress(LstFiles.SelectedItems.Count);
+			progressDlg.StartPosition = FormStartPosition.CenterScreen;
+			progressDlg.TopMost = true;
+			progressDlg.Show(this);
+			progressDlg.BringToFront();
+			Application.DoEvents();
+
+			int extractedCount = 0;
+			foreach (ListViewItem item in LstFiles.SelectedItems)
+			{
+				if (progressDlg.Cancel)
+					break;
+
+				var fileTag = item.Tag.ToString();
+				var fileName = item.Text;
+				try
+				{
+					IpfFile ipfFile = null;
+					if (fileTag.StartsWith("IPF") && fileTag.Contains(":"))
+					{
+						if (!_additionalFiles.TryGetValue(fileTag, out ipfFile))
+							continue;
+					}
+					else if (!_files.TryGetValue(fileTag, out ipfFile))
+					{
+						continue;
+					}
+
+					// Create directories as needed
+					var outputPath = Path.Combine(ipfExtractPath, ipfFile.Path);
+					var outputDir = Path.GetDirectoryName(outputPath);
+					Directory.CreateDirectory(outputDir);
+
+					// Extract file
+					var fileData = ipfFile.GetData();
+					File.WriteAllBytes(outputPath, fileData);
+					extractedCount++;
+				}
+				catch (Exception ex)
+				{
+					MessageBox.Show($"Error extracting {fileName}: {ex.Message}", Text,
+						MessageBoxButtons.OK, MessageBoxIcon.Error);
+				}
+
+				progressDlg.UpdateProgress(extractedCount);
+				Application.DoEvents();
+			}
+
+			progressDlg.Close();
+			MessageBox.Show($"Extracted {extractedCount} file(s) successfully to '{ipfExtractPath}'.", Text,
+				MessageBoxButtons.OK, MessageBoxIcon.Information);
 		}
 
 		/// <summary>

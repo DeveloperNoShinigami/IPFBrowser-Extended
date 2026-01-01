@@ -481,7 +481,7 @@
 			this.BtnExtractPack.ImageTransparentColor = System.Drawing.Color.Magenta;
 			this.BtnExtractPack.Name = "BtnExtractPack";
 			this.BtnExtractPack.Size = new System.Drawing.Size(36, 38);
-			this.BtnExtractPack.Text = "Extract open IPF file";
+			this.BtnExtractPack.Text = "Extract Files";
 			this.BtnExtractPack.Click += new System.EventHandler(this.BtnExtractPack_Click);
 			// 
 			// BtnExtractFile

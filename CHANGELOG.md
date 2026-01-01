@@ -2,9 +2,28 @@
 
 All notable changes to IPF Browser Extended will be documented in this file.
 
-## [Unreleased]
+## [v1.1.0] - 2026-01-01
 
 ### Added
+- **Advanced File Extraction** - Enhanced extraction system with:
+  - Multi-folder selection with Ctrl+Click in tree view
+  - Custom TreeView highlighting for selected folders
+  - Context menu extraction: "Extract This Folder..." or "Extract N Selected Folders..."
+  - Extract selected files from file list with multi-select support
+  - Automatic IPF-named folder creation for organized output
+  - Cross-IPF extraction: select folders from different IPFs and extract to separate folders
+  - Progress bars for all extraction operations
+  - Recursive subdirectory extraction
+  - Right-click context menu integration
+
+- **Real-time IES Editing** - Enhanced editing workflow:
+  - Live file-list indicators (blue * for modified, green + for imported, red × for deleted)
+  - Real-time text change tracking during editing
+  - Switch between multiple edited files without losing changes
+  - Per-file context menu: Edit and Discard Changes options
+  - Hidden toolbar Edit/Cancel buttons for cleaner UI
+  - Persistent change tracking across file selection
+
 - **3D Model Viewer** - Advanced 3D rendering for XAC model files with:
   - XAC mesh file parsing and rendering
   - DDS texture loading and application
@@ -48,6 +67,20 @@ All notable changes to IPF Browser Extended will be documented in this file.
 - **File Management**
   - Improved IPF file loading and parsing
   - Enhanced error logging for file operations
+
+- **Extraction System**
+  - Fixed TreeView multi-select not preserving selections on right-click
+  - Fixed path matching for recursive subdirectory extraction
+  - Fixed IPF index detection for cross-IPF folder extraction
+  - Corrected Tag-based node identification for additional IPF folders
+  - Fixed main IPF folder extraction using node.Name property
+  - Resolved duplicate IPF folder creation when extracting from same IPF
+
+- **IES Editing**
+  - Fixed indicator disappearing when re-selecting edited files
+  - Removed overly strict selection guard that prevented file switching
+  - Fixed duplicate context menu items using Name-based lookup
+  - Fixed Dictionary KeyNotFoundException on right-click edited files
 
 ### In Development
 - Mesh selection functionality (click and multi-select)

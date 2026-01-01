@@ -2,24 +2,36 @@
 
 An extended version of IPF Browser with advanced features for viewing, editing, and managing IPF archive files from Tree of Savior.
 
-**👉 [Start Here: Quick Start Guide](QUICKSTART.md)** | **[Full Installation](INSTALL.md)** | **[Report Issues](https://github.com/DeveloperNoShinigami/IPFBrowser-Extended/issues)
+**👉 [Start Here: Quick Start Guide](Docs/QUICKSTART.md)** | **[Full Installation](Docs/INSTALL.md)** | **[Report Issues](https://github.com/DeveloperNoShinigami/IPFBrowser-Extended/issues)**
 
 ## Features
 
 ### File Management
 - **Open IPF files** - Reads any IPF files (iCBT1, iCBT2, kTOS, iTOS, and current versions)
 - **Open multiple IPFs** - Load additional IPF files alongside the main one for cross-referencing
-- **Extract files** - Extract single files, all files in one IPF, or an entire client's data
+- **Extract files** - Advanced extraction system:
+  - Extract single files or multi-select files from file list
+  - Extract entire folders with right-click context menu
+  - Multi-folder extraction: Ctrl+Click to select multiple folders, then right-click to extract
+  - Cross-IPF extraction: Select folders from different IPFs and extract to separate named folders
+  - Recursive subdirectory extraction
+  - Progress bars for all extraction operations
+  - Automatic IPF-named folder organization
 - **Drag & drop support** - Drag IPF files onto the window to open them
 
 ### IPF Editing
 - **Import files** - Import any file type (IES, DDS, XAC, LUA, etc.) into an IPF
-- **Edit IES files** - Edit IES database files as XML with syntax highlighting
+- **Edit IES files** - Edit IES database files as XML with:
+  - Syntax highlighting
+  - Real-time change tracking
+  - Live file-list status indicators (blue * = modified, green + = imported, red × = deleted)
+  - Switch between multiple edited files without losing changes
+  - Per-file context menu with Edit and Discard Changes options
 - **Delete files** - Mark files for deletion from the IPF
 - **Save changes** - Save all modifications (edits, imports, deletions) to the IPF
   - **Save (Ctrl+S)** - Overwrites the current IPF
   - **Save As (Ctrl+Shift+S)** - Saves to a new IPF file
-- **Discard changes** - Discard all pending modifications
+- **Discard changes** - Discard all pending modifications or per-file via context menu
 
 ### Preview
 - **Text files** - Preview with syntax highlighting (XML, LUA, JSON, etc.)
@@ -53,15 +65,18 @@ An extended version of IPF Browser with advanced features for viewing, editing, 
 - **Edit menu** - Edit IES (Ctrl+E), Import File (Ctrl+I), Discard All Changes
 - **Context menus** - Right-click for file-specific actions
 - **Visual indicators** - Color-coded file status:
-  - Blue with `*` prefix: Modified files
-  - Green with `+` prefix: Imported files  
-  - Red with `×` prefix: Files marked for deletion
-- **Status bar** - Shows pending changes count
-
 ### Keyboard Shortcuts
 | Shortcut | Action |
 |----------|--------|
 | Ctrl+O | Open IPF file |
+| Ctrl+S | Save changes (overwrite) |
+| Ctrl+Shift+S | Save As (new file) |
+| Ctrl+E | Edit selected IES file |
+| Ctrl+I | Import file(s) |
+| Ctrl+Click (Tree View) | Multi-select folders for extraction |
+| Right-Click (Tree View) | Extract folder(s) context menu |
+| Right-Click (File List) | File actions: Edit, Discard Changes, Extract, Select All |
+| Right-Click (3D Viewer) | Toggle camera lock (when over 3D model) |
 | Ctrl+S | Save changes (overwrite) |
 | Ctrl+Shift+S | Save As (new file) |
 | Ctrl+E | Edit selected IES file |
@@ -79,7 +94,7 @@ Open `IPFBrowser.sln` in Visual Studio 2022 and build in Debug or Release mode.
 - Download the latest [Release](https://github.com/DeveloperNoShinigami/IPFBrowser-Extended/releases) and run `IPF Browser.exe`
 
 ### Detailed Installation Guide
-See [**INSTALL.md**](INSTALL.md) for:
+See [**Docs/INSTALL.md**](Docs/INSTALL.md) for:
 - Complete system requirements
 - Build from source instructions  
 - Dependency information
